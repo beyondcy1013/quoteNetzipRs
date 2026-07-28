@@ -1,0 +1,18 @@
+[Unit]
+Description=NetzipRs native Rust quote service for quoteGateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/bin/netzip
+Environment=NETZIP_SERVICE_LISTEN=0.0.0.0:16893
+EnvironmentFile=-/etc/default/netzip-rs
+ExecStart=/home/bin/netzip/netzip_service
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

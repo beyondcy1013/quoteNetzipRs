@@ -1,0 +1,61 @@
+# Rust build output
+/target
+/mytarget/
+
+# Project-local temporary and runtime output
+/.tmp/
+/tmp/
+/diagnostics/
+/captured_windows_traffic/
+/windows_debug/
+/docs/logs/
+
+# Packet captures, traces, dumps, and logs
+*.pcap
+*.pcapng
+*.etl
+*.dmp
+*.log
+/dump_*.bin
+/spawn_dump_*.bin
+
+# Python caches and local virtual environments
+__pycache__/
+*.py[cod]
+/netzip_api_bin/NetzipAPI/StockPy/env/
+/netzip_api_bin/NetzipAPI/StockPy/env1/
+
+# IDE and native sample build output
+.idea/
+.vscode/
+**/.vs/
+*.swp
+*.swo
+*.suo
+*.user
+*.pdb
+*.ilk
+*.idb
+*.ipch
+*.iobj
+*.obj
+*.o
+*.tlog
+*.lastbuildstate
+/netzip_api_bin/NetzipAPI/StockC#/bin/
+/netzip_api_bin/NetzipAPI/StockC#/obj/
+/netzip_api_bin/NetzipAPI/StockC++/Test/Debug/
+/netzip_api_bin/NetzipAPI/StockC++/Test/Release/
+
+# Regenerable OEM runtime state and market-data snapshots
+/netzip_api_bin/NetzipAPI/*/数据/
+/netzip_api_bin/NetzipAPI/*/用户/配置文件.ini
+/netzip_api_bin/NetzipAPI/*/用户/登录用户详情.csv
+/netzip_api_bin/NetzipAPI/*/登录用户详情.csv
+/netzip_api_bin/NetzipAPI/*/日志.txt
+/netzip_api_bin/NetzipAPI/网际风账号续费方式.url
+/netzip_api_bin/NetzipAPI/联系续费*.txt
+/升级/
+/数据/
+/用户/
+/系统/

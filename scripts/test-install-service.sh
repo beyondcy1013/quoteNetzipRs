@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+install_script="$script_dir/install-service.sh"
+
+grep -Fq 'systemctl enable netzip-rs.service' "$install_script"
+grep -Fq 'systemctl restart netzip-rs.service' "$install_script"
+grep -Fq 'systemctl is-active --quiet netzip-rs.service' "$install_script"
+grep -Fq 'netzip-rs-full-push.service' "$install_script"
+grep -Fq 'netzip-rs-full-push.timer' "$install_script"
+grep -Fq 'systemctl enable netzip-rs-full-push.service' "$install_script"
+grep -Fq 'systemctl restart netzip-rs-full-push.service' "$install_script"
+grep -Fq 'systemctl is-active --quiet netzip-rs-full-push.service' "$install_script"
+grep -Fq 'NETZIP_INSTALL_ENABLE_FULL_PUSH' "$install_script"
+grep -Fq 'systemctl disable --now netzip-rs-full-push.timer' "$install_script"
+grep -Fq 'systemctl disable --now netzip-rs-full-push.service' "$install_script"
+grep -Fq 'systemctl disable --now netzip-full-push.timer' "$install_script"
+grep -Fq 'Environment=NETZIP_SERVICE_LISTEN=0.0.0.0:16893' "$script_dir/../deploy/netzip-rs.service"
+grep -Fq 'NETZIP_SERVICE_ADDR:-127.0.0.1:16893' "$script_dir/run-full-push.sh"
+grep -Fq 'http://127.0.0.1:16893/health' "$install_script"
+grep -Fq 'Restart=always' "$script_dir/../deploy/netzip-rs-full-push.service"
+grep -Fq 'WantedBy=multi-user.target' "$script_dir/../deploy/netzip-rs-full-push.service"
+test ! -e "$script_dir/../deploy/netzip-rs-full-push.timer"
+! grep -Fq 'systemctl enable --now netzip-rs-full-push.timer' "$install_script"
+! grep -Fq '18083' "$script_dir/../deploy/netzip-rs.service"
+! grep -Fq '18083' "$script_dir/run-full-push.sh"

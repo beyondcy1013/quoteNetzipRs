@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Netzip Web UI</title>
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="stylesheet" href="/webgui/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <p class="eyebrow">Netzip 服务</p>
+          <h1>Netzip Web UI</h1>
+        </div>
+        <div class="service-bar">
+          <div class="actions">
+            <button id="healthBtn" class="ghost">健康检查</button>
+            <button id="capabilitiesBtn" class="ghost">能力列表</button>
+          </div>
+        </div>
+        <p id="serviceStatus" class="status-line">尚未检查服务状态。</p>
+      </header>
+
+      <div class="tab-strip page-tab-strip" role="tablist" aria-label="页面标签页">
+        <button
+          class="tab-btn page-tab-btn is-active"
+          type="button"
+          data-page-tab-target="server"
+          role="tab"
+          aria-selected="true"
+        >
+          连接面板
+        </button>
+        <button
+          class="tab-btn page-tab-btn"
+          type="button"
+          data-page-tab-target="console"
+          role="tab"
+          aria-selected="false"
+        >
+          调试控制台
+        </button>
+      </div>
+
+      <div class="page-panel is-active" data-page-tab-panel="server">
+        <section class="panel legacy-stage">
+          <div class="legacy-window">
+            <div class="legacy-window-bar">
+              <div class="legacy-window-brand">
+                <span class="legacy-window-icon" aria-hidden="true"></span>
+                <span class="legacy-window-title">自定义 V3.61.1229 - 等待对接</span>
+              </div>
+              <div class="legacy-window-actions" aria-hidden="true">
+                <span class="legacy-window-action"></span>
+                <span class="legacy-window-action"></span>
+                <span class="legacy-window-action legacy-window-action--close"></span>
+              </div>
+            </div>
+
+            <div class="legacy-window-body">
+              <div class="legacy-window-grid">
+                <fieldset class="legacy-group">
+                  <legend>认证服务器</legend>
+                  <div class="legacy-stack">
+                    <div class="legacy-form-row legacy-form-row--auth">
+                      <label class="legacy-label" for="legacyAccount">账号</label>
+                      <input id="legacyAccount" value="168" />
+                      <label class="legacy-label" for="legacyPassword">密码</label>
+                      <input id="legacyPassword" type="password" value="168" />
+                    </div>
+
+                    <div class="legacy-form-row legacy-form-row--expiry">
+                      <span class="legacy-label">账号到期</span>
+                      <div id="legacyAccountExpiry" class="legacy-static">2037年05月31日</div>
+                      <button id="legacyPasswordBtn" type="button" class="legacy-secondary-btn">修改密码</button>
+                    </div>
+
+                    <div class="legacy-form-row legacy-form-row--select">
+                      <label class="legacy-label" for="legacyAuthServer">认证</label>
+                      <select id="legacyAuthServer">
+                        <option>智能-杭州阿里云VIP7_6100 (24ms 47/500)</option>
+                      </select>
+                    </div>
+
+                    <div class="legacy-connection-row">
+                      <label class="legacy-choice">
+                        <input id="legacyConnectRadio" type="radio" name="legacyConnectState" checked />
+                        <span>连接</span>
+                      </label>
+                      <label class="legacy-choice">
+                        <input id="legacyDisconnectRadio" type="radio" name="legacyConnectState" />
+                        <span>断开</span>
+                      </label>
+                      <span id="legacyConnectionState" class="legacy-connection-state">等待加载配置</span>
+                    </div>
+                  </div>
+                </fieldset>
+
+                <fieldset class="legacy-group">
+                  <legend>数据服务器</legend>
+                  <div class="legacy-server-list">
+                    <div class="legacy-server-row">
+                      <label class="legacy-choice legacy-choice--checkbox">
+                        <input id="legacyEnableStockMain" type="checkbox" />
+                        <span>股票主站</span>
+                      </label>
+                      <select id="legacyStockMainServer">
+                        <option>网络断开 - 等待更新服务器列表</option>
+                      </select>
+                    </div>
+
+                    <div class="legacy-server-row">
+                      <label class="legacy-choice legacy-choice--checkbox">
+                        <input id="legacyEnableStockBackup" type="checkbox" checked />
+                        <span>股票备用</span>
+                      </label>
+                      <select id="legacyStockBackupServer">
+                        <option>南京移动 (53ms 184/500)</option>
+                      </select>
+                    </div>
+
+                    <div class="legacy-server-row">
+                      <label class="legacy-choice legacy-choice--checkbox">
+                        <input id="legacyEnableReserved" type="checkbox" />
+                        <span>预留功能</span>
+                      </label>
+                      <select id="legacyReservedServer">
+                        <option></option>
+                      </select>
+                    </div>
+
+                    <div class="legacy-server-row">
+                      <label class="legacy-choice legacy-choice--checkbox">
+                        <input id="legacyEnableWenhua" type="checkbox" />
+                        <span>文华财经</span>
+                      </label>
+                      <select id="legacyWenhuaServer">
+                        <option>网络断开 - 等待更新服务器列表</option>
+                      </select>
+                    </div>
+
+                    <div class="legacy-server-row">
+                      <label class="legacy-choice legacy-choice--checkbox">
+                        <input id="legacyEnableBoyi" type="checkbox" />
+                        <span>博易大师</span>
+                      </label>
+                      <select id="legacyBoyiServer">
+                        <option>网络断开 - 等待更新服务器列表</option>
+                      </select>
+                    </div>
+                  </div>
+                </fieldset>
+
+                <fieldset class="legacy-group legacy-group--full">
+                  <legend>扩展功能</legend>
+                  <div class="legacy-feature-rows">
+                    <div class="legacy-feature-row">
+                      <div class="legacy-feature-item">
+                        <label class="legacy-choice legacy-choice--checkbox">
+                          <input id="legacyFillDaily" type="checkbox" />
+                          <span>补日线</span>
+                        </label>
+                        <input id="legacyFillDailyCount" value="1000" />
+                      </div>
+
+                      <div class="legacy-feature-item">
+                        <label class="legacy-choice legacy-choice--checkbox">
+                          <input id="legacyFill5Min" type="checkbox" />
+                          <span>补5分钟</span>
+                        </label>
+                        <input id="legacyFill5MinCount" value="3000" />
+                      </div>
+
+                      <div class="legacy-feature-item">
+                        <label class="legacy-choice legacy-choice--checkbox">
+                          <input id="legacyFill1Min" type="checkbox" />
+                          <span>补1分钟</span>
+                        </label>
+                        <input id="legacyFill1MinCount" value="2000" />
+                      </div>
+
+                      <div class="legacy-feature-item">
+                        <label class="legacy-choice legacy-choice--checkbox">
+                          <input id="legacyFillTicks" type="checkbox" />
+                          <span>补分时/笔</span>
+                        </label>
+                        <input id="legacyFillTicksCount" value="1" />
+                      </div>
+
+                      <label class="legacy-feature-item legacy-feature-item--checkbox">
+                        <span class="legacy-choice legacy-choice--checkbox">
+                          <input id="legacyFillF10" type="checkbox" />
+                          <span>补F10</span>
+                        </span>
+                      </label>
+                    </div>
+
+                    <div class="legacy-feature-row">
+                      <label class="legacy-feature-item legacy-feature-item--checkbox">
+                        <span class="legacy-choice legacy-choice--checkbox">
+                          <input id="legacyFillAllStocks" type="checkbox" />
+                          <span>补全部股票</span>
+                        </span>
+                      </label>
+
+                      <label class="legacy-feature-item legacy-feature-item--checkbox">
+                        <span class="legacy-choice legacy-choice--checkbox">
+                          <input id="legacyNetworkTime" type="checkbox" />
+                          <span>网络校时</span>
+                        </span>
+                      </label>
+
+                      <div class="legacy-feature-item legacy-feature-item--wide">
+                        <label class="legacy-inline-label" for="legacyDataInterval">补数据间隔</label>
+                        <input id="legacyDataInterval" value="10" />
+                      </div>
+
+                      <div class="legacy-feature-item legacy-feature-item--wide">
+                        <label class="legacy-choice legacy-choice--checkbox">
+                          <input id="legacyOperatorEnabled" type="checkbox" checked />
+                          <span>网络运营商</span>
+                        </label>
+                        <input id="legacyOperatorName" value="xxx移动" />
+                      </div>
+                    </div>
+                  </div>
+                </fieldset>
+              </div>
+
+              <div class="legacy-toolbar">
+                <button id="legacyRefreshBtn" type="button" class="legacy-secondary-btn">加载配置</button>
+                <button id="legacySaveBtn" type="button" class="legacy-secondary-btn">保存配置</button>
+                <button id="legacyProbeBtn" type="button" class="legacy-secondary-btn">认证测速</button>
+              </div>
+              <p id="legacyProtocolNote" class="legacy-note">
+                当前 Linux Web 服务可加载配置、测速和端口连通性验证；真实 DLL 登录仍待协议封装。
+              </p>
+              <div id="legacyStatusBar" class="legacy-statusbar">等待加载配置</div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="page-panel" data-page-tab-panel="console">
+        <div class="tab-strip tool-tab-strip" role="tablist" aria-label="控制台标签页">
+          <button
+            class="tab-btn is-active"
+            type="button"
+            data-tool-tab-target="quote"
+            role="tab"
+            aria-selected="true"
+          >
+            行情数据
+          </button>
+          <button
+            class="tab-btn"
+            type="button"
+            data-tool-tab-target="finance"
+            role="tab"
+            aria-selected="false"
+          >
+            财务数据
+          </button>
+          <button
+            class="tab-btn"
+            type="button"
+            data-tool-tab-target="f10"
+            role="tab"
+            aria-selected="false"
+          >
+            公告/F10
+          </button>
+          <button
+            class="tab-btn"
+            type="button"
+            data-tool-tab-target="debug"
+            role="tab"
+            aria-selected="false"
+          >
+            调试工具
+          </button>
+        </div>
+
+        <main class="workspace">
+        <aside class="sidebar">
+          <div class="tool-tab-panel is-active" data-tool-tab-panel="quote">
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">查询</p>
+                <h2>7709 实时行情</h2>
+              </div>
+              <label class="field">
+                <span>股票代码 / 代码列表</span>
+                <input id="tdxLiveSymbols" value="SH600000,SZ300948" />
+              </label>
+              <label class="field">
+                <span>端口</span>
+                <input id="tdxLivePort" value="7709" />
+              </label>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>返回上限</span>
+                  <input id="tdxLiveLimit" value="20" />
+                </label>
+                <label class="field">
+                  <span>等待毫秒</span>
+                  <input id="tdxLiveSettleMs" value="300" />
+                </label>
+              </div>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>读取超时(ms)</span>
+                  <input id="tdxLiveReadTimeoutMs" value="1000" />
+                </label>
+                <label class="field">
+                  <span>连接超时(ms)</span>
+                  <input id="tdxLiveConnectTimeoutMs" value="5000" />
+                </label>
+              </div>
+              <button id="tdxLiveQuoteBtn" class="primary">查询实时行情</button>
+          <p class="panel-copy">
+            这里会真实连 `7709`，先完成代码表会话，再发在线 `0x0547` 报价请求。
+            这比本地 `0x0547 正文` 调试慢一些，但返回的是当前在线真实报价。
+          </p>
+        </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">查询</p>
+                <h2>7709 K线</h2>
+              </div>
+              <label class="field">
+                <span>股票代码</span>
+                <input id="tdxKlineSymbol" value="SH600000" />
+              </label>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>K线类型</span>
+                  <input id="tdxKlineType" value="1d" />
+                </label>
+                <label class="field">
+                  <span>类别</span>
+                  <input id="tdxKlineCategory" placeholder="可选" />
+                </label>
+              </div>
+              <div class="grid three-up">
+                <label class="field">
+                  <span>起始</span>
+                  <input id="tdxKlineStart" value="0" />
+                </label>
+                <label class="field">
+                  <span>数量</span>
+                  <input id="tdxKlineCount" value="32" />
+                </label>
+                <label class="field">
+                  <span>返回上限</span>
+                  <input id="tdxKlineLimit" value="20" />
+                </label>
+              </div>
+              <label class="field">
+                <span>端口</span>
+                <input id="tdxKlinePort" value="7709" />
+              </label>
+              <div class="grid three-up">
+                <label class="field">
+                  <span>读取超时(ms)</span>
+                  <input id="tdxKlineReadTimeoutMs" value="1000" />
+                </label>
+                <label class="field">
+                  <span>连接超时(ms)</span>
+                  <input id="tdxKlineConnectTimeoutMs" value="5000" />
+                </label>
+                <label class="field">
+                  <span>等待毫秒</span>
+                  <input id="tdxKlineSettleMs" value="300" />
+                </label>
+              </div>
+              <button id="tdxKlineBtn" class="primary">查询 K 线</button>
+              <p class="panel-copy">
+                这会真实连 `7709`，完成启动序列和代码表会话后再请求在线 `K线`。
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">查询</p>
+                <h2>0x0547 正文查询</h2>
+              </div>
+              <label class="field">
+                <span>路径 / 目录</span>
+                <input
+                  id="quote0547Path"
+                  value="/tmp/quote0547_server"
+                />
+              </label>
+              <label class="field">
+                <span>股票代码</span>
+                <input id="quote0547Symbol" value="600000" />
+              </label>
+              <label class="field">
+                <span>返回上限</span>
+                <input id="quote0547Limit" value="10" />
+              </label>
+              <label class="field">
+                <span>小数位</span>
+                <input id="quote0547DecimalPoint" placeholder="可选" />
+              </label>
+              <label class="field">
+                <span>小数位过滤</span>
+                <input id="quote0547DecimalPointFilter" placeholder="可选，例如 2 / 3 / 4" />
+              </label>
+              <label class="field">
+                <span>前三位前缀</span>
+                <input id="quote0547Prefix3" placeholder="可选，例如 113 / 510 / 688 / 300" />
+              </label>
+              <label class="field">
+                <span>模式桶</span>
+                <input
+                  id="quote0547PatternBucket"
+                  placeholder="可选，例如 default_2_0_0 / extra3_positive"
+                />
+              </label>
+              <label class="field">
+                <span>状态矩阵</span>
+                <input
+                  id="quote0547StateMatrix"
+                  placeholder="可选，例如 with_quote_head_time_present"
+                />
+              </label>
+              <label class="field">
+                <span>报价头</span>
+                <input
+                  id="quote0547QuoteHeadState"
+                  placeholder="可选，with / without"
+                />
+              </label>
+              <label class="field">
+                <span>时间字段</span>
+                <input
+                  id="quote0547TimePresence"
+                  placeholder="可选，present / absent"
+                />
+              </label>
+              <label class="field">
+                <span>名称关键词</span>
+                <input
+                  id="quote0547NameKeywordTag"
+                  placeholder="可选，ETF / 转债 / REIT / 指数"
+                />
+              </label>
+              <label class="field">
+                <span>模式子桶</span>
+                <input
+                  id="quote0547PatternSubbucket"
+                  placeholder="可选，例如 default_2_0_0_quote_head_hint_1500_time_present"
+                />
+              </label>
+              <button id="quote0547Btn" class="primary">查询 0x0547 正文</button>
+              <p class="panel-copy">
+                这里只展示已证明字段；未手工填写 `小数位` 时，会自动用 `7709` 代码表补
+                `名称 / 昨收 / 小数位` 做交叉校验。
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">查询</p>
+                <h2>7709 代码表查询</h2>
+              </div>
+              <label class="field">
+                <span>股票代码 / 名称</span>
+                <input id="tdxQueryText" value="600000" />
+              </label>
+              <label class="field">
+                <span>端口</span>
+                <input id="tdxQueryPort" value="7709" />
+              </label>
+              <label class="field">
+                <span>返回上限</span>
+                <input id="tdxQueryLimit" value="20" />
+              </label>
+              <button id="tdxQueryBtn" class="primary">查询代码表</button>
+              <p class="panel-copy">
+                这会实时走一次 `7709` 代码表同步后再过滤，只返回真实在线代码表结果。
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">流程</p>
+                <h2>7709 同步</h2>
+              </div>
+              <label class="field">
+                <span>端口</span>
+                <input id="tdxPort" value="7709" />
+              </label>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>预览上限</span>
+                  <input id="tdxPreviewLimit" value="10" />
+                </label>
+                <label class="field">
+                  <span>等待毫秒</span>
+                  <input id="tdxSettleMs" value="120" />
+                </label>
+              </div>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>读取超时(ms)</span>
+                  <input id="tdxReadTimeoutMs" value="1000" />
+                </label>
+                <label class="field">
+                  <span>连接超时(ms)</span>
+                  <input id="tdxConnectTimeoutMs" value="5000" />
+                </label>
+              </div>
+              <label class="field">
+                <span>CSV 输出路径</span>
+                <input id="tdxCsvPath" placeholder="/tmp/tdx7709_codes.csv" />
+              </label>
+              <div class="actions">
+                <button id="tdxBtn" class="primary">执行 7709 同步</button>
+                <button id="tdxBootstrapBtn" class="ghost">查看启动方案</button>
+              </div>
+              <p class="panel-copy">
+                这里可以直接查看当前已知的 `probe.hello -> 0x7b00 -> 0x9400 -> 0x9900`
+                模板，不用再手工翻源码或抓包。
+              </p>
+            </section>
+          </div>
+
+          <div class="tool-tab-panel" data-tool-tab-panel="finance">
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">查询</p>
+                <h2>FIN 记录查询</h2>
+              </div>
+              <label class="field">
+                <span>路径</span>
+                <input id="finQueryPath" value="/tmp/full_sh.FIN" />
+              </label>
+              <label class="field">
+                <span>股票代码</span>
+                <input id="finQuerySymbol" value="SH600000" />
+              </label>
+              <button id="finQueryBtn" class="primary">查询 FIN 记录</button>
+              <p class="panel-copy">
+                这里只查本地 `FIN` 文件里的真实财务记录，不生成补全值，也不伪造字段。
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">流程</p>
+                <h2>FIN 解析</h2>
+              </div>
+              <label class="field">
+                <span>路径</span>
+                <input id="finPath" value="/tmp/full_sh.FIN" />
+              </label>
+              <label class="field">
+                <span>预览上限</span>
+                <input id="finLimit" value="10" />
+              </label>
+              <label class="field">
+                <span>CSV 输出路径</span>
+                <input id="finCsvPath" placeholder="/tmp/full_sh.csv" />
+              </label>
+              <button id="finBtn" class="primary">执行 FIN 解析</button>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">流程</p>
+                <h2>FIN 取值器</h2>
+              </div>
+              <label class="field">
+                <span>路径</span>
+                <input id="getterPath" value="/tmp/full_sh.FIN" />
+              </label>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>股票代码</span>
+                  <input id="getterSymbol" value="SH600000" />
+                </label>
+                <label class="field">
+                  <span>字段 ID</span>
+                  <input id="getterFieldId" value="0x2b" />
+                </label>
+              </div>
+              <div class="actions">
+                <button id="getterValueBtn" class="primary">执行字段取值</button>
+                <button id="getterSpecsBtn" class="ghost">列出取值器规格</button>
+              </div>
+              <p class="panel-copy">
+                取值器规格会直接返回当前未解的字段 ID，方便持续补齐 `0x2d..0x45` 这条线。
+              </p>
+            </section>
+          </div>
+
+          <div class="tool-tab-panel" data-tool-tab-panel="f10">
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">查询</p>
+                <h2>7709 F10 类目</h2>
+              </div>
+              <label class="field">
+                <span>股票代码</span>
+                <input id="tdxF10Symbol" value="SH600000" />
+              </label>
+              <label class="field">
+                <span>端口</span>
+                <input id="tdxF10Port" value="7709" />
+              </label>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>返回上限</span>
+                  <input id="tdxF10Limit" value="20" />
+                </label>
+                <label class="field">
+                  <span>等待毫秒</span>
+                  <input id="tdxF10SettleMs" value="300" />
+                </label>
+              </div>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>读取超时(ms)</span>
+                  <input id="tdxF10ReadTimeoutMs" value="1000" />
+                </label>
+                <label class="field">
+                  <span>连接超时(ms)</span>
+                  <input id="tdxF10ConnectTimeoutMs" value="5000" />
+                </label>
+              </div>
+              <button id="tdxF10CategoriesBtn" class="primary">查询 F10 类目</button>
+              <p class="panel-copy">
+                这会先取 `F10` 类目清单，返回栏目名、文件名和正文区间。
+              </p>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">查询</p>
+                <h2>7709 F10 正文</h2>
+              </div>
+              <label class="field">
+                <span>类目名称</span>
+                <input id="tdxF10CategoryName" value="最新提示" />
+              </label>
+              <label class="field">
+                <span>文件名</span>
+                <input id="tdxF10Filename" placeholder="可选，例如 600000.txt" />
+              </label>
+              <div class="grid two-up">
+                <label class="field">
+                  <span>起始</span>
+                  <input id="tdxF10Start" placeholder="可选" />
+                </label>
+                <label class="field">
+                  <span>长度</span>
+                  <input id="tdxF10Length" placeholder="可选" />
+                </label>
+              </div>
+              <label class="field">
+                <span>预览字符数</span>
+                <input id="tdxF10PreviewChars" value="600" />
+              </label>
+              <button id="tdxF10ContentBtn" class="primary">查询 F10 正文</button>
+              <p class="panel-copy">
+                填 `类目名称` 时会先自动查类目再拉正文；也可以直接给
+                `文件名/起始/长度`。
+              </p>
+            </section>
+          </div>
+
+          <div class="tool-tab-panel" data-tool-tab-panel="debug">
+            <section class="panel">
+              <div class="panel-head">
+                <p class="eyebrow">流程</p>
+                <h2>0x0547 附加字段画像</h2>
+              </div>
+              <label class="field">
+                <span>路径</span>
+                <input
+                  id="quote0547ExtraProfilePath"
+                  value="/tmp/quote0547_server/frame063_sub2900_tag0547_off528759_inflated.bin"
+                />
+              </label>
+              <label class="field">
+                <span>异常上限</span>
+                <input id="quote0547ExtraProfileLimit" value="10" />
+              </label>
+              <button id="quote0547ExtraProfileBtn" class="primary">执行附加字段画像</button>
+              <p class="panel-copy">
+                只做真实 `0x0547` extra raw 画像，不补语义名。返回什么就展示什么，方便继续收敛
+                `extra1/2/3` 的分布和异常样本。
+              </p>
+            </section>
+
+            <section class="panel">
+            <div class="panel-head">
+              <p class="eyebrow">流程</p>
+              <h2>0x118 转储对比</h2>
+            </div>
+            <p class="panel-copy">
+              用来对照 `0x10066b60` 的 `0x118` 明文和 `0x7b00` 出网前 `payload[2..]`。
+              先看计划，再喂两个转储文件直接比较。
+            </p>
+            <div class="actions">
+              <button id="compare118Btn" class="ghost">查看 0x118 转储对比方案</button>
+              <button id="blobCompareBtn" class="primary">执行二进制对比</button>
+            </div>
+            <label class="field">
+              <span>左侧路径</span>
+              <input id="blobLeftPath" placeholder="/tmp/tdx118_plain.bin" />
+            </label>
+            <label class="field">
+              <span>右侧路径</span>
+              <input id="blobRightPath" placeholder="/tmp/tdx118_cipher.bin" />
+            </label>
+            <div class="grid two-up">
+              <label class="field">
+                <span>左侧偏移</span>
+                <input id="blobLeftOffset" value="0" />
+              </label>
+              <label class="field">
+                <span>右侧偏移</span>
+                <input id="blobRightOffset" value="0" />
+              </label>
+            </div>
+            <div class="grid two-up">
+              <label class="field">
+                <span>对比长度</span>
+                <input id="blobCompareLen" value="280" />
+              </label>
+              <label class="field">
+                <span>分块大小</span>
+                <input id="blobBlockSize" value="8" />
+              </label>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <p class="eyebrow">流程</p>
+              <h2>应答汇总</h2>
+            </div>
+            <label class="field">
+              <span>路径</span>
+              <input id="answerPath" value="/tmp/answer.bin" />
+            </label>
+            <button id="answerBtn" class="primary">汇总缓冲区</button>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <p class="eyebrow">流程</p>
+              <h2>PCAP 汇总</h2>
+            </div>
+            <label class="field">
+              <span>路径</span>
+              <input id="pcapPath" placeholder="/tmp/netzip_full_tcp.pcap" />
+            </label>
+            <label class="field">
+              <span>分段上限</span>
+              <input id="pcapSegmentLimit" value="12" />
+            </label>
+            <button id="pcapBtn" class="primary">执行 PCAP 汇总</button>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <p class="eyebrow">流程</p>
+              <h2>流分析</h2>
+            </div>
+            <label class="field">
+              <span>路径</span>
+              <input id="streamPath" placeholder="/tmp/client_to_server_full.raw" />
+            </label>
+            <div class="grid two-up">
+              <label class="field checkbox-field">
+                <span>输入模式</span>
+                <select id="streamMode">
+                  <option value="bin">二进制</option>
+                  <option value="hex">十六进制文本</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>预览上限</span>
+                <input id="streamPreviewLimit" value="8" />
+              </label>
+            </div>
+            <button id="streamBtn" class="primary">执行流分析</button>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <p class="eyebrow">流程</p>
+              <h2>行情帧扫描</h2>
+            </div>
+            <label class="field">
+              <span>路径</span>
+              <input
+                id="quoteFramePath"
+                value="/home/codes/netzipapi-rust-demo/tmp/flow_7709_2400.bin"
+              />
+            </label>
+            <button id="quoteFrameBtn" class="primary">执行行情帧扫描</button>
+            <p class="panel-copy">
+              `7709` 启动序列里最关键的是首个 `0x7b00` 帧；现在结果会额外显示“去掉前置 tag 后”的
+              `8-byte` 块统计。
+            </p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <p class="eyebrow">流程</p>
+              <h2>行情回放</h2>
+            </div>
+            <label class="field">
+              <span>流文件</span>
+              <input
+                id="quotePath"
+                value="/home/codes/netzipapi-rust-demo/tmp/flow_2655_7709_probe.bin"
+              />
+            </label>
+            <label class="field">
+              <span>端口</span>
+              <input id="quotePort" value="7709" />
+            </label>
+            <label class="field">
+              <span>分段</span>
+              <input id="quoteSegments" placeholder="0:582:0,582:260:420,842:58:550" />
+            </label>
+            <div class="grid two-up">
+              <label class="field">
+                <span>接收等待(ms)</span>
+                <input id="quoteRecvMs" value="250" />
+              </label>
+              <label class="field">
+                <span>连接超时(ms)</span>
+                <input id="quoteConnectTimeoutMs" value="5000" />
+              </label>
+            </div>
+            <label class="field">
+              <span>保存回复到</span>
+              <input id="quoteSavePath" placeholder="/tmp/quote_reply.bin" />
+            </label>
+            <button id="quoteBtn" class="primary">执行行情回放</button>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <p class="eyebrow">流程</p>
+              <h2>协议探测</h2>
+            </div>
+            <label class="field">
+              <span>端口</span>
+              <input id="probePort" value="7709" />
+            </label>
+            <label class="field">
+              <span>载荷</span>
+              <textarea id="probePayload">0c0100000000020002001500</textarea>
+            </label>
+            <div class="grid two-up">
+              <label class="field">
+                <span>编码</span>
+                <select id="probeEncoding">
+                  <option value="utf8">UTF-8</option>
+                  <option value="utf16le">UTF-16LE</option>
+                  <option value="hex" selected>十六进制</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>读取秒数</span>
+                <input id="probeReadSecs" value="1" />
+              </label>
+            </div>
+            <div class="grid two-up">
+              <label class="field checkbox-field">
+                <span>追加 NUL</span>
+                <select id="probeNul">
+                  <option value="false" selected>否</option>
+                  <option value="true">是</option>
+                </select>
+              </label>
+              <label class="field checkbox-field">
+                <span>前置 U32LE</span>
+                <select id="probePrefixU32le">
+                  <option value="false" selected>否</option>
+                  <option value="true">是</option>
+                </select>
+              </label>
+            </div>
+            <button id="probeBtn" class="primary">执行协议探测</button>
+          </section>
+          </div>
+        </aside>
+
+        <section class="content">
+          <div class="content-grid">
+            <section class="panel response-panel">
+              <div class="panel-head">
+                <p class="eyebrow">结果</p>
+                <h2 id="resultTitle">尚未发起请求</h2>
+              </div>
+              <p id="resultSummary" class="result-summary">
+                使用左侧表单调用服务。
+              </p>
+              <div id="resultMeta" class="result-meta"></div>
+              <textarea id="resultBody" spellcheck="false"></textarea>
+            </section>
+
+            <section class="panel log-panel">
+              <div class="panel-head">
+                <p class="eyebrow">运行时</p>
+                <h2>最近日志</h2>
+              </div>
+              <div id="logList" class="log-list"></div>
+            </section>
+          </div>
+        </section>
+        </main>
+      </div>
+    </div>
+
+    <script src="/webgui/app.js"></script>
+  </body>
+</html>
