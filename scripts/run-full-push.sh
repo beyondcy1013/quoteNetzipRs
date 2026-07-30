@@ -66,10 +66,22 @@ while :; do
     as_of_date="$(jq -r '.payload.as_of_date // ""' <<<"$worklist" 2>/dev/null || true)"
     trade_date="$(jq -r '.payload.freshness.required_quote_trade_date // ""' <<<"$worklist" 2>/dev/null || true)"
     if [[ "${NETZIP_FULL_PUSH_FORCE:-0}" == "1" || ( -n "$as_of_date" && "$as_of_date" == "$trade_date" ) ]]; then
-        if ! publish_response="$(curl --noproxy '*' -fsS --max-time 300 -X POST "$publish_url" \
+        publish_result="$(curl --noproxy '*' -sS --max-time 300 --write-out $'\n%{http_code}' -X POST "$publish_url" \
             -H 'Content-Type: application/json' \
-            -d "{\"batch_size\":$batch_size,\"limit\":$limit}")"; then
-            echo "netzip full push failed; retrying after ${interval_secs}s" >&2
+            -d "{\"batch_size\":$batch_size,\"limit\":$limit}")"
+        curl_status=$?
+        if [[ "$publish_result" == *$'\n'* ]]; then
+            http_status="${publish_result##*$'\n'}"
+            publish_response="${publish_result%$'\n'*}"
+        else
+            http_status="unknown"
+            publish_response="$publish_result"
+        fi
+        if (( curl_status != 0 )) || [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+            echo "netzip full push failed: stage=publish-worklist http_status=$http_status curl_status=$curl_status; retrying after ${interval_secs}s" >&2
+            if [[ -n "$publish_response" ]]; then
+                printf 'netzip full push response_body=%s\n' "$publish_response" >&2
+            fi
             should_backoff=1
         else
             printf '%s\n' "$publish_response"
