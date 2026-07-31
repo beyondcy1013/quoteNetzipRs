@@ -37,6 +37,8 @@ use std::time::{Duration, Instant};
 static FULL_PUSH_SESSION_CACHE: OnceLock<Mutex<BTreeMap<String, Tdx7709Session>>> = OnceLock::new();
 static FULL_PUSH_LAST_PUBLISHED_AT: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
 static NETZIP_RUST_TCP_CLIENT: OnceLock<Mutex<Option<NetzipRustTcpClient>>> = OnceLock::new();
+static NATIVE_PUSH_CODE_TABLE_LOOKUP: OnceLock<BTreeMap<String, Quote0547CodeTableInfo>> =
+    OnceLock::new();
 
 const NETZIP_RUST_TCP_MAGIC: &[u8; 4] = b"NZRS";
 const NETZIP_RUST_TCP_VERSION: u16 = 2;
@@ -610,6 +612,8 @@ struct HqwPushWorklistResponse {
     shard_count: usize,
     received_records: usize,
     converted_records: usize,
+    unconverted_symbols: usize,
+    unconverted_symbol_sample: Vec<String>,
     published_records: usize,
     unchanged_records: usize,
     publish_batches: usize,
@@ -6117,10 +6121,18 @@ fn execute_hqw_push_worklist(
     let worklist = parse_gateway_worklist(&worklist_payload)?;
     let (primary_symbols, _) = split_full_push_upstreams(&worklist.symbols);
     let batches = split_full_push_batches(&primary_symbols, 100)?;
-    let code_table = Tdx7709Session::open(&Tdx7709Config::default())
-        .map_err(|err| ApiError::internal(format!("open push code-table session failed: {err}")))?
-        .sync_result();
-    let code_table_lookup = build_quote_0547_code_table_lookup(&code_table.records);
+    let code_table_lookup = if let Some(lookup) = NATIVE_PUSH_CODE_TABLE_LOOKUP.get() {
+        lookup.clone()
+    } else {
+        let code_table = Tdx7709Session::open(&Tdx7709Config::default())
+            .map_err(|err| {
+                ApiError::internal(format!("open push code-table session failed: {err}"))
+            })?
+            .sync_result();
+        let lookup = build_quote_0547_code_table_lookup(&code_table.records);
+        let _ = NATIVE_PUSH_CODE_TABLE_LOOKUP.set(lookup.clone());
+        lookup
+    };
     let started_at = Instant::now();
     let deadline = started_at + duration;
     let (sender, receiver) = mpsc::channel::<NativePushReaderMessage>();
@@ -6198,6 +6210,7 @@ fn execute_hqw_push_worklist(
         let mut protocol = GatewayPublishProtocol::Auto;
         let mut received_records = 0usize;
         let mut converted_records = 0usize;
+        let mut unconverted_symbols = BTreeSet::new();
         let mut published_records = 0usize;
         let mut unchanged_records = 0usize;
         let mut publish_batches = 0usize;
@@ -6231,6 +6244,8 @@ fn execute_hqw_push_worklist(
                             },
                         );
                         converted_records = converted_records.saturating_add(1);
+                    } else if let Some(symbol) = tdx_0547_record_symbol(&record) {
+                        unconverted_symbols.insert(symbol);
                     }
                 }
                 Ok(NativePushReaderMessage::Healthy { shard }) => {
@@ -6316,6 +6331,8 @@ fn execute_hqw_push_worklist(
             shard_count,
             received_records,
             converted_records,
+            unconverted_symbols: unconverted_symbols.len(),
+            unconverted_symbol_sample: unconverted_symbols.into_iter().take(30).collect(),
             published_records,
             unchanged_records,
             publish_batches,
