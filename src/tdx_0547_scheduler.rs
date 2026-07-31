@@ -2,6 +2,27 @@ const MIN_REQUEST_INTERVAL_MS: u64 = 800;
 const MIN_RESPONSE_INTERVAL_MS: u64 = 2_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenewalBatchGate {
+    next_due_ms: u64,
+}
+
+impl RenewalBatchGate {
+    pub fn new(start_ms: u64) -> Self {
+        Self {
+            next_due_ms: start_ms.saturating_add(MIN_RESPONSE_INTERVAL_MS),
+        }
+    }
+
+    pub fn take_due(&mut self, now_ms: u64) -> bool {
+        if now_ms < self.next_due_ms {
+            return false;
+        }
+        self.next_due_ms = now_ms.saturating_add(MIN_RESPONSE_INTERVAL_MS);
+        true
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenewalRequestItem {
     pub market: u8,
     pub code: String,
@@ -108,7 +129,18 @@ impl QuoteRenewalScheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::{QuoteRenewalScheduler, RenewalSecurity};
+    use super::{QuoteRenewalScheduler, RenewalBatchGate, RenewalSecurity};
+
+    #[test]
+    fn shard_batch_gate_allows_at_most_one_renewal_every_two_seconds() {
+        let mut gate = RenewalBatchGate::new(0);
+
+        assert!(!gate.take_due(1_999));
+        assert!(gate.take_due(2_000));
+        assert!(!gate.take_due(2_000));
+        assert!(!gate.take_due(3_999));
+        assert!(gate.take_due(4_000));
+    }
 
     #[test]
     fn renewal_requires_both_vendor_observed_time_gates() {

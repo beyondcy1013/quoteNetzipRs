@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use netzipapi_rust_demo::tdx_push_coalescer::{TdxPushCoalescer, TdxPushEvent};
-use netzipapi_rust_demo::tdx_0547_scheduler::QuoteRenewalScheduler;
+use netzipapi_rust_demo::tdx_0547_scheduler::{QuoteRenewalScheduler, RenewalBatchGate};
 use netzipapi_rust_demo::{
     FIN_GETTER_UNRESOLVED_IDS, ProtoProbeConfig, ProtoProbeEncoding as ProbeEncoding,
     QuoteReplayConfig, SH_FIN_URL, SZ_FIN_URL, Tdx7709Config, Tdx7709QuoteRequestItem,
@@ -6176,6 +6176,7 @@ fn execute_hqw_push_worklist(
                             Tdx7709Session::open_quote_only(&Tdx7709Config::default())?;
                         let initial = session.request_live_quotes(&request_items)?;
                         let mut renewal_scheduler = QuoteRenewalScheduler::default();
+                        let mut renewal_gate = RenewalBatchGate::new(0);
                         let _ = sender.send(NativePushReaderMessage::Healthy { shard });
                         for record in initial
                             .quote_bodies
@@ -6222,11 +6223,9 @@ fn execute_hqw_push_worklist(
                                     return Ok(());
                                 }
                             }
-                            let due = renewal_scheduler.take_due(
-                                session_started_at.elapsed().as_millis() as u64,
-                                100,
-                            );
-                            if !due.is_empty() {
+                            let now_ms = session_started_at.elapsed().as_millis() as u64;
+                            if renewal_gate.take_due(now_ms) {
+                                let due = renewal_scheduler.take_due(now_ms, 100);
                                 let renewals = due
                                     .into_iter()
                                     .map(|item| Tdx7709QuoteRequestItem {
@@ -6235,8 +6234,10 @@ fn execute_hqw_push_worklist(
                                         token: item.token,
                                     })
                                     .collect::<Vec<_>>();
-                                session.send_live_quote_renewal(&renewals)?;
-                                let _ = sender.send(NativePushReaderMessage::RenewalSent);
+                                if !renewals.is_empty() {
+                                    session.send_live_quote_renewal(&renewals)?;
+                                    let _ = sender.send(NativePushReaderMessage::RenewalSent);
+                                }
                             }
                         }
                         Ok(())
