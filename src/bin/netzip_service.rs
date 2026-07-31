@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use netzipapi_rust_demo::tdx_push_coalescer::{TdxPushCoalescer, TdxPushEvent};
-use netzipapi_rust_demo::tdx_0547_scheduler::{QuoteRenewalScheduler, RenewalSecurity};
+use netzipapi_rust_demo::tdx_0547_scheduler::QuoteRenewalScheduler;
 use netzipapi_rust_demo::{
     FIN_GETTER_UNRESOLVED_IDS, ProtoProbeConfig, ProtoProbeEncoding as ProbeEncoding,
     QuoteReplayConfig, SH_FIN_URL, SZ_FIN_URL, Tdx7709Config, Tdx7709QuoteRequestItem,
@@ -6175,11 +6175,7 @@ fn execute_hqw_push_worklist(
                         let mut session =
                             Tdx7709Session::open_quote_only(&Tdx7709Config::default())?;
                         let initial = session.request_live_quotes(&request_items)?;
-                        let mut renewal_scheduler = QuoteRenewalScheduler::new(
-                            request_items.iter().map(|item| {
-                                RenewalSecurity::new(item.market, item.code.clone(), 0, 0)
-                            }),
-                        );
+                        let mut renewal_scheduler = QuoteRenewalScheduler::default();
                         let _ = sender.send(NativePushReaderMessage::Healthy { shard });
                         for record in initial
                             .quote_bodies

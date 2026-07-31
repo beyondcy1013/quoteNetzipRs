@@ -94,6 +94,14 @@ impl QuoteRenewalScheduler {
         {
             security.token = token;
             security.last_response_ms = now_ms;
+        } else {
+            self.securities.push(RenewalSecurity {
+                market,
+                code: code.to_string(),
+                last_request_ms: 0,
+                last_response_ms: now_ms,
+                token,
+            });
         }
     }
 }
