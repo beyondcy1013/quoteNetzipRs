@@ -23,6 +23,7 @@ pub struct Tdx0547Record {
     pub code: String,
     pub active1_raw: Option<u16>,
     pub time_hhmmss_raw: Option<u32>,
+    pub renewal_token_raw: Option<u32>,
     pub extra0_raw: Option<i32>,
     pub extra0_time_hhmmss: Option<String>,
     pub extra1_raw: Option<i32>,
@@ -82,6 +83,10 @@ pub fn parse_tdx_0547_body(bytes: &[u8]) -> Tdx0547Body {
             .and_then(|fields| fields.time_hhmmss_raw)
             .or(time_hhmmss_raw_at_fixed_offset);
         let extra0_raw = fields.as_ref().map(|fields| fields.extras[0]);
+        let renewal_token_raw = decoded
+            .get(start + 0x21..start + 0x25)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u32::from_le_bytes);
         records.push(Tdx0547Record {
             start,
             len: next_start.saturating_sub(start),
@@ -89,6 +94,7 @@ pub fn parse_tdx_0547_body(bytes: &[u8]) -> Tdx0547Body {
             code,
             active1_raw,
             time_hhmmss_raw,
+            renewal_token_raw,
             extra0_time_hhmmss: extra0_raw.and_then(format_extra0_time_hint),
             extra0_raw,
             extra1_raw: fields.as_ref().map(|fields| fields.extras[1]),

@@ -619,6 +619,13 @@ fn build_quote_0547_request_payload(
     Ok(out)
 }
 
+fn build_quote_0547_renewal_request(
+    items: &[Tdx7709QuoteRequestItem],
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let payload = build_quote_0547_request_payload(items)?;
+    Ok(build_client10_frame(0x420c, 0x2a02, 0x0100, &payload))
+}
+
 fn build_security_bars_packet(
     category: u16,
     market: u16,
@@ -1318,7 +1325,7 @@ fn hex_line(bytes: &[u8]) -> String {
 mod tests {
     use super::{
         build_bootstrap_packets, build_company_info_category_packet, build_probe_hello,
-        build_security_bars_packet, live_quote_bodies_cover_items,
+        build_quote_0547_renewal_request, build_security_bars_packet, live_quote_bodies_cover_items,
         parse_company_info_category_body, parse_company_info_content_body, parse_kline_body,
     };
     use crate::{Tdx0547Body, Tdx0547Record, Tdx7709QuoteRequestItem};
@@ -1336,6 +1343,7 @@ mod tests {
                     code: "000001".to_string(),
                     active1_raw: None,
                     time_hhmmss_raw: None,
+                    renewal_token_raw: None,
                     extra0_raw: None,
                     extra0_time_hhmmss: None,
                     extra1_raw: None,
@@ -1354,6 +1362,7 @@ mod tests {
                     code: "600000".to_string(),
                     active1_raw: None,
                     time_hhmmss_raw: None,
+                    renewal_token_raw: None,
                     extra0_raw: None,
                     extra0_time_hhmmss: None,
                     extra1_raw: None,
