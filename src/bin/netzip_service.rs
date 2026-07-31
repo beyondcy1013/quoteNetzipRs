@@ -5119,11 +5119,26 @@ fn resolve_quote_0547_decimal_point(
             lookup_quote_0547_code_table_info(record, code_table_lookup)
                 .map(|info| info.decimal_point)
         })
-        .or_else(|| quote_decimal_point_fallback(record.market))
+        .or_else(|| quote_decimal_point_fallback(record.market, &record.code))
 }
 
-fn quote_decimal_point_fallback(market: u8) -> Option<u8> {
-    (market == 2).then_some(2)
+fn quote_decimal_point_fallback(market: u8, code: &str) -> Option<u8> {
+    match market {
+        0 if ["00", "20", "30"]
+            .iter()
+            .any(|prefix| code.starts_with(prefix)) =>
+        {
+            Some(2)
+        }
+        1 if ["60", "68", "90"]
+            .iter()
+            .any(|prefix| code.starts_with(prefix)) =>
+        {
+            Some(2)
+        }
+        2 => Some(2),
+        _ => None,
+    }
 }
 
 fn lookup_quote_0547_code_table_info<'a>(
