@@ -576,6 +576,19 @@ mod tests {
     }
 
     #[test]
+    fn parser_extracts_vendor_renewal_token_at_record_offset_0x21() {
+        let mut decoded = vec![0x01, 0x00, 0x01, b'6', b'0', b'0', b'0', b'0', b'0'];
+        decoded.resize(2 + 0x21, 0);
+        decoded.extend_from_slice(&0x1234_5678_u32.to_le_bytes());
+
+        let encoded = decoded.iter().map(|byte| byte ^ 0x93).collect::<Vec<_>>();
+        let parsed = parse_tdx_0547_body(&encoded);
+
+        assert_eq!(parsed.records.len(), 1);
+        assert_eq!(parsed.records[0].renewal_token_raw, Some(0x1234_5678));
+    }
+
+    #[test]
     fn parser_extracts_consistent_quote_head_from_sample_like_record() {
         let decoded = [
             0x01, b'6', b'0', b'0', b'0', b'0', b'0', 0x25, 0x0f, 0xaa, 0x0f, 0x04, 0x41, 0x0a,

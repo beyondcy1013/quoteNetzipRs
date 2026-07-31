@@ -1403,6 +1403,20 @@ mod tests {
     }
 
     #[test]
+    fn renewal_quote_frame_uses_vendor_2a02_command_and_tokens() {
+        let frame = build_quote_0547_renewal_request(&[Tdx7709QuoteRequestItem {
+            market: 1,
+            code: "600000".to_string(),
+            token: 0x1234_5678,
+        }])
+        .expect("renewal request");
+
+        assert_eq!(&frame[..6], &[0x0c, 0x42, 0x02, 0x2a, 0x00, 0x01]);
+        assert_eq!(&frame[10..14], &[0x47, 0x05, 0x01, 0x00]);
+        assert_eq!(&frame[21..25], &0x1234_5678_u32.to_le_bytes());
+    }
+
+    #[test]
     fn bootstrap_packets_have_expected_lengths() {
         let packets = build_bootstrap_packets().expect("bootstrap packets");
         assert_eq!(packets.len(), 4);
