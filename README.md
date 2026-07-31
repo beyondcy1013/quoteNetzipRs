@@ -43,6 +43,8 @@ systemctl status netzip-rs.service netzip-rs-full-push.service
 发布到 quoteGateway 的行以 `source_protocol=netzip-rust-7709-0547.v2` 标记这次
 公共时间语义。quoteGateway 只允许已有 v1 行被 v2 行迁移覆盖；除此以外的行情时间
 倒退仍按 stale 数据拒绝，避免为了修正旧缓存而放宽正常的时序保护。
+公共成交额复刻由 `netzip-rust-7709-0547.v3` 标记；quoteGateway 仅允许同一时间的
+v2 缓存行迁移到 v3，跨交易日和普通同版本冲突仍按原规则拒绝。
 
 本仓库同时保留 `Stock.dll`、Wine 和历史图文卡协议的分析资料，用于字段校对和回归；
 它们不是当前 Linux 生产链路的运行依赖。
@@ -71,7 +73,7 @@ systemctl status netzip-rs.service netzip-rs-full-push.service
 本项目有一个重要的参考目录（已移入本项目内）：
 
 - 相对路径：`./netzip_api_bin/NetzipAPI`
-- 绝对路径：`/home/codes/netzipapi-rust-demo/netzip_api_bin/NetzipAPI`
+- 绝对路径：`/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI`
 
 这个目录保存了官方/历史样本中的接口规范、C++/C#/Python 示例、DLL 与配置文件、服务器列表和相关资源。当前仓库中的 DLL 调用方式、请求串格式、运行依赖、抓包分析结论，都需要和这个参考目录交叉核对。
 
@@ -482,31 +484,32 @@ curl -fsS -X POST http://127.0.0.1:16893/api/debug/quote-frame-scan \
   -d '{"path":"/tmp/flow_7709_2400.bin"}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/quote-replay \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/netzipapi-rust-demo/tmp/flow_2655_7709_probe.bin","host":"120.195.71.160","port":7709}'
+  -d '{"path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/tmp/flow_2655_7709_probe.bin","host":"120.195.71.160","port":7709}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/proto-probe \
   -H 'Content-Type: application/json' \
   -d '{"host":"120.195.71.160","port":7709,"payload":"0c0100000000020002001500","encoding":"hex","read_secs":1}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/pcap-summary \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/netzipapi-rust-demo/tmp/netzip_full_tcp.pcap","segment_limit":12}'
+  -d '{"path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/tmp/netzip_full_tcp.pcap","segment_limit":12}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/local-2000-log-scan \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/netzipapi-rust-demo/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","port":2000,"small_max":4096,"code_preview_limit":20}'
+  -d '{"path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","port":2000,"small_max":4096,"code_preview_limit":20}'
 curl -fsS http://127.0.0.1:16893/api/debug/local-2000-vs-auth-7100
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/local-2000-vs-auth-7100 \
   -H 'Content-Type: application/json' \
-  -d '{"local_log_path":"/home/codes/netzipapi-rust-demo/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","auth_pcap_path":"/home/codes/netzipapi-rust-demo/tmp/netzip_full_tcp.pcap"}'
+  -d '{"local_log_path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","auth_pcap_path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/tmp/netzip_full_tcp.pcap"}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/stream-analyze \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/netzipapi-rust-demo/captured_windows_traffic/client_to_server_full.raw","is_hex":false}'
+  -d '{"path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/captured_windows_traffic/client_to_server_full.raw","is_hex":false}'
 ```
 
 `GET /api/quotes` 是面向 `quote-gateway` 的紧凑生产契约，数据链为
 `NetzipRs -> quote-gateway`，不依赖 FoxTrader、Windows 或 Wine。当前 `0x0547`
 解析已提供价格、昨收、开高低、总成交量、当前成交量、成交额和行情时间。
 正的累计成交量会在 `0x0547` 解码边界从 wire 值归一化为 OEM 公共值
-`wire_volume + 1`；wire `0` 保持 `0`。这个规则不应用于当前成交量或成交额，
-quoteGateway 也不再做二次补偿。
+`wire_volume + 1`；wire `0` 保持 `0`。这个规则不应用于当前成交量。
+`Tdx0547Record.amount / amount_raw` 保留 wire 诊断值；紧凑生产接口在公共对象边界复刻
+网际风按证券类别执行的 `f32` 有损量化，不做固定偏移补偿，quoteGateway 也不二次计算。
 `POST /api/tdx7709/live-quote` 保留为详细诊断协议，便于与紧凑接口做 A/B 对比。
 
 `POST /api/hqw/publish` 只使用 quote-gateway 的独立 Rust 入口
@@ -546,16 +549,30 @@ NETZIP_FULL_PUSH_INTERVAL_SECS=5
 NETZIP_FULL_PUSH_IDLE_INTERVAL_SECS=5
 NETZIP_FULL_PUSH_BATCH_SIZE=100
 NETZIP_FULL_PUSH_LIMIT=6000
+NETZIP_FULL_PUSH_WORKERS=8
+NETZIP_FULL_PUSH_MODE=poll
+NETZIP_NATIVE_PUSH_SESSION_SECS=240
+NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS=30
+# 仅在显式切换并完成 shadow 验证后设置：
+# NETZIP_NATIVE_PUSH_PUBLISH_ENABLE=1
 ```
 
 安装脚本会启用常驻的 `netzip-rs-full-push.service`，并删除旧的
-`netzip-rs-full-push.timer`。发布进程全天保持在线：交易时段内串行拉取全市场行情；午休、闭市和
+`netzip-rs-full-push.timer`。发布进程全天保持在线：交易时段内默认使用 8 个持久 7709 会话分片拉取全市场行情；午休、闭市和
 周末只按 `NETZIP_FULL_PUSH_IDLE_INTERVAL_SECS` 等待，不访问行情与网关发布接口。只有工作表的
 `as_of_date` 与 `required_quote_trade_date` 一致时才拉取行情，避免节假日重推上一交易日快照。
 
 常驻进程按“交易日 + 上游行情时间”记录每只股票最近成功发布版本。上游返回相同或更早时间的
 快照时计入 `unchanged_count`，不会发给 quoteGateway；一轮没有任何新行情时按
 `NETZIP_FULL_PUSH_INTERVAL_SECS` 等待，避免无数据空转和重复源事件。
+`NETZIP_FULL_PUSH_WORKERS` 可设置为 `1..=16`，实际 worker 数不会超过当前阶段批次数；接口响应会返回
+`elapsed_ms / primary_elapsed_ms / fallback_elapsed_ms / *worker_count / *slowest_batch_ms`，用于持续观察扫描周期。
+
+`NETZIP_FULL_PUSH_MODE` 默认为 `poll`。显式设为 `push` 后，resident runner 才会调用
+`POST /api/hqw/push-worklist`：沪深按每连接 100 条建立持久订阅，100 ms 内按标的保留最新记录并
+分批发布；故障分片每秒重连并用初始快照补缺，每 30 秒继续执行一次全市场轮询校验，北交所也由
+该校验路径覆盖。服务端还要求 `NETZIP_NATIVE_PUSH_PUBLISH_ENABLE=1`，缺少该二次授权时会拒绝
+真实发布；请求省略 `publish` 或传 `false` 时仅作影子观测。
 
 首次影子验证或独立入口尚未验收时，部署必须保持自动全推关闭：
 
@@ -613,8 +630,8 @@ journalctl -u netzip-rs-full-push.service -f
   - 新一轮对位也已经把“首个对齐之后的分叉”量出来了：远端第二个 `penc@416` 落在 `payload boundary` 后 `348` 字节，而本地大对象里后续 `penc` 当前落在 `payload boundary` 后 `2 / 190 / 53888` 字节；首个 marker 已对齐，后续 deeper shell 仍未对齐
 - `quote-frame-scan` 会附带一个轻量摘要，直接显示 `7709/7719` 这类 bootstrap 标签、代码表请求计数、`phase_order / phase_counts`，以及首个 `0x7b00` 主站校验帧“去掉前置 tag 后”的 `8-byte` 块统计
   - 当前已能自动标出 `post-login.bulk-record-29b-*`、`post-login.fin-143b-*`、`post-login.quote-0547-*`、`post-login.quote-054c-*` 这几段登录后阶段
-- Windows 动态取证步骤单独写在 [TDX118_DUMP_GUIDE.md](/home/codes/netzipapi-rust-demo/TDX118_DUMP_GUIDE.md)
-- 如果怀疑之前抓包混入了通达信或其它证券软件的连接，先按 [WINDOWS_PROCESS_CAPTURE_GUIDE.md](/home/codes/netzipapi-rust-demo/WINDOWS_PROCESS_CAPTURE_GUIDE.md) 做“按目标进程归因”的干净抓包
+- Windows 动态取证步骤单独写在 [TDX118_DUMP_GUIDE.md](/home/codes/quoteNetzipRs/netzipapi-rust-demo/TDX118_DUMP_GUIDE.md)
+- 如果怀疑之前抓包混入了通达信或其它证券软件的连接，先按 [WINDOWS_PROCESS_CAPTURE_GUIDE.md](/home/codes/quoteNetzipRs/netzipapi-rust-demo/WINDOWS_PROCESS_CAPTURE_GUIDE.md) 做“按目标进程归因”的干净抓包
 
 ## Web GUI
 
@@ -695,7 +712,7 @@ http://<server-lan-ip>:16893/
 | `quote_head.price / last_close / open / high / low` | 已解析 | 只在公开 TDX varint 头和高低开收自洽时返回 |
 | `volume` | 已解析并归一化 | 正的 wire 累计量按 `wire + 1` 转为 OEM 公共累计量；wire `0` 保持 `0` |
 | `current_volume` | 已解析 | 当前成交量保持 wire 解码值，不套用累计量归一化 |
-| `amount / amount_raw` | 已解析、语义仍在校对 | 保留当前 0547 浮点解码值和原始 `u32`；没有证据支持固定偏移补偿 |
+| `amount / amount_raw` | 已解析 | 详细诊断接口保留 0547 浮点解码值和原始 `u32`；紧凑接口另在 OEM 公共边界执行已验证的类别相关 `f32` 量化 |
 | `normalized_quote_head.*` | 条件派生 | 依赖 `decimal_point` 或代码表精度做缩放 |
 | `code_table_name / code_table_pre_close` | 外部补充 | 来自在线 `7709` 代码表，不是 `0x0547` 体内原始字段 |
 | `code_table_name_keyword_tag(s)` | 外部补充 | 来自代码表名称的保守标签，不是 `0x0547` 体内原始字段 |
@@ -1353,7 +1370,7 @@ cargo run --example pcap_summary -- /tmp/netzip_6100.pcap
     - 先按 `count * 0x1f4 + 0x3e8` 分配输出区
     - 再逐条调用 `0x1007ef80`
   - `0x1007ef80` 则基本坐实为“内部实时对象 -> 对外 `OEM_REPORT(pack=1)`”的映射器
-  - 这里和 [OemStock.h](/home/codes/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `#pragma pack(push, 1)` / `OEM_REPORT // 实时数据，500 字节` 偏移已经能一一对上：
+  - 这里和 [OemStock.h](/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `#pragma pack(push, 1)` / `OEM_REPORT // 实时数据，500 字节` 偏移已经能一一对上：
     - `+0x058..0x084` 对应 `time/foot/openDate/openTime/closeDate/open/high/low/close/volume/amount/inVol`
     - `+0x088..0x176` 对应 `pricesell / volsell / vsellCha / pricebuy / volbuy / vbuyCha`
     - `+0x178..0x1a6` 对应 `jingJia/avPrice/isBuy/nowv/nowa/change/weiBi/liangBi/last/limitUp/limitDown/isIndex/isDaPan/isStock/bsNum/tickNum`
@@ -1377,7 +1394,7 @@ cargo run --example pcap_summary -- /tmp/netzip_6100.pcap
 - `0x1007d810`
   - 现在更准确地说，是 `OEM_MARKETINFO + OEM_STKINFO[]` 的代码表初始化导出器
   - `0x10083a00(base) = base + 0xc8`，`0x100839c0(n) = 0xc8 + n * 0xfa`
-  - 这和 [OemStock.h](/home/codes/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `offsetof(OEM_MARKETINFO, stkInfo) = 0xc8`、`OEM_STKINFO = 250字节` 完全对上
+  - 这和 [OemStock.h](/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `offsetof(OEM_MARKETINFO, stkInfo) = 0xc8`、`OEM_STKINFO = 250字节` 完全对上
 
 另外，`rustHq` 这份公开通达信实现对 `0x750010` 这条线也给了一个很强的交叉印证：
 - [packet.rs](/home/codes/crates/rustHq/src/packet.rs#L168) 的标准财务请求低 `16` 位就是 `0x0010`

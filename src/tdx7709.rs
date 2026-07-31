@@ -191,6 +191,7 @@ pub struct Tdx7709Session {
     raw_reply: Vec<u8>,
     frames: Vec<Tdx7709ServerFrame>,
     records: Vec<Tdx7709CodeTableRecord>,
+    quote_delivery_decoder: Tdx0547DeliveryDecoder,
 }
 
 impl Tdx7709Session {
@@ -280,7 +281,6 @@ impl Tdx7709Session {
             return Ok(Tdx7709QuoteObservation::default());
         }
         let deadline = Instant::now() + observe_for;
-        let mut decoder = Tdx0547DeliveryDecoder::default();
         let mut observation = Tdx7709QuoteObservation::default();
         let mut buf = [0u8; 65_536];
         let result = (|| -> Result<(), Box<dyn Error>> {
@@ -295,14 +295,15 @@ impl Tdx7709Session {
                         let received_at = SystemTime::now();
                         observation.bytes_read += n;
                         observation.read_count += 1;
-                        observation
-                            .deliveries
-                            .extend(decoder.push(&buf[..n])?.into_iter().map(|delivery| {
-                                Tdx7709TimedQuoteDelivery {
+                        observation.deliveries.extend(
+                            self.quote_delivery_decoder
+                                .push(&buf[..n])?
+                                .into_iter()
+                                .map(|delivery| Tdx7709TimedQuoteDelivery {
                                     received_at,
                                     delivery,
-                                }
-                            }));
+                                }),
+                        );
                     }
                     Err(error)
                         if matches!(
@@ -319,7 +320,7 @@ impl Tdx7709Session {
         })();
         self.stream.set_read_timeout(Some(self.read_timeout))?;
         result?;
-        observation.pending_bytes = decoder.pending_bytes();
+        observation.pending_bytes = self.quote_delivery_decoder.pending_bytes();
         Ok(observation)
     }
 
@@ -1023,6 +1024,7 @@ fn open_tdx7709_session_impl(
         raw_reply: reply_stream,
         frames,
         records: records.into_values().collect(),
+        quote_delivery_decoder: Tdx0547DeliveryDecoder::default(),
     })
 }
 

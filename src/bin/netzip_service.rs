@@ -6,6 +6,7 @@ use axum::{
     Json, Router,
     routing::{get, post},
 };
+use netzipapi_rust_demo::tdx_push_coalescer::{TdxPushCoalescer, TdxPushEvent};
 use netzipapi_rust_demo::{
     FIN_GETTER_UNRESOLVED_IDS, ProtoProbeConfig, ProtoProbeEncoding as ProbeEncoding,
     QuoteReplayConfig, SH_FIN_URL, SZ_FIN_URL, Tdx7709Config, Tdx7709QuoteRequestItem,
@@ -30,8 +31,8 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock, mpsc};
+use std::time::{Duration, Instant};
 
 static FULL_PUSH_SESSION_CACHE: OnceLock<Mutex<BTreeMap<String, Tdx7709Session>>> = OnceLock::new();
 static FULL_PUSH_LAST_PUBLISHED_AT: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
@@ -533,6 +534,13 @@ struct CompactQuotesResponse {
     data: Vec<CompactQuote>,
 }
 
+#[derive(Clone, Copy)]
+enum OemPublicAmountMode {
+    Index,
+    PriceRelative,
+    Direct,
+}
+
 #[derive(Deserialize)]
 struct HqwPublishRequest {
     symbols: Vec<String>,
@@ -554,6 +562,7 @@ struct HqwPublishResponse {
 struct HqwPublishWorklistRequest {
     batch_size: Option<usize>,
     limit: Option<usize>,
+    worker_count: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -564,9 +573,17 @@ struct HqwPublishWorklistResponse {
     trade_date: String,
     worklist_count: usize,
     batch_size: usize,
+    worker_count: usize,
     batch_count: usize,
     primary_batch_count: usize,
+    primary_worker_count: usize,
+    primary_elapsed_ms: u128,
+    primary_slowest_batch_ms: u128,
     fallback_batch_count: usize,
+    fallback_worker_count: usize,
+    fallback_elapsed_ms: u128,
+    fallback_slowest_batch_ms: u128,
+    elapsed_ms: u128,
     fallback_host: String,
     fallback_published_count: usize,
     published_count: usize,
@@ -574,6 +591,33 @@ struct HqwPublishWorklistResponse {
     no_current_quote_count: usize,
     no_current_quote_codes: Vec<String>,
     last_gateway_response: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HqwPushWorklistRequest {
+    duration_secs: Option<u64>,
+    audit_interval_secs: Option<u64>,
+    publish: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct HqwPushWorklistResponse {
+    success: bool,
+    publish: bool,
+    trade_date: String,
+    worklist_count: usize,
+    subscribed_count: usize,
+    shard_count: usize,
+    received_records: usize,
+    converted_records: usize,
+    published_records: usize,
+    unchanged_records: usize,
+    publish_batches: usize,
+    reader_failures: usize,
+    reader_recoveries: usize,
+    audit_runs: usize,
+    audit_failures: usize,
+    elapsed_ms: u128,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -603,6 +647,10 @@ impl GatewayPublishProtocol {
 
 struct FullPushStageResult {
     batch_count: usize,
+    worker_count: usize,
+    elapsed_ms: u128,
+    slowest_batch_ms: u128,
+    total_batch_elapsed_ms: u128,
     published_count: usize,
     unchanged_count: usize,
     missing_codes: Vec<String>,
@@ -1398,6 +1446,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/quotes", get(compact_quotes))
         .route("/api/hqw/publish", post(hqw_publish))
         .route("/api/hqw/publish-worklist", post(hqw_publish_worklist))
+        .route("/api/hqw/push-worklist", post(hqw_push_worklist))
         .route("/api/legacy/panel/bootstrap", get(legacy_panel_bootstrap))
         .route("/api/legacy/panel/save", post(legacy_panel_save))
         .route("/api/legacy/panel/probe", post(legacy_panel_probe))
@@ -1505,6 +1554,7 @@ fn stable_endpoints() -> Vec<&'static str> {
         "GET /api/quotes",
         "POST /api/hqw/publish",
         "POST /api/hqw/publish-worklist",
+        "POST /api/hqw/push-worklist",
         "GET /api/legacy/panel/bootstrap",
         "POST /api/legacy/panel/save",
         "POST /api/legacy/panel/probe",
@@ -1555,6 +1605,7 @@ fn linux_native_endpoints() -> Vec<&'static str> {
         "GET /api/quotes",
         "POST /api/hqw/publish",
         "POST /api/hqw/publish-worklist",
+        "POST /api/hqw/push-worklist",
         "POST /api/fin/parse",
         "POST /api/fin/query-record",
         "POST /api/fin/getter-value",
@@ -1861,6 +1912,7 @@ fn compact_quotes_response_from_result(
             .map(|info| info.name.clone());
         seen.insert(symbol.clone());
         let quote_datetime = tdx_0547_public_time_hhmmss(record);
+        let amount = oem_public_amount(record, decimal_point);
         data.push(CompactQuote {
             code: record.code.clone(),
             symbol,
@@ -1872,7 +1924,7 @@ fn compact_quotes_response_from_result(
             high: head.high,
             low: head.low,
             volume: record.volume,
-            amount: record.amount,
+            amount,
             datetime: quote_datetime.clone(),
             quote_datetime,
             source: SOURCE,
@@ -1892,6 +1944,72 @@ fn compact_quotes_response_from_result(
         missing_codes,
         data,
     }
+}
+
+fn oem_public_amount(
+    record: &netzipapi_rust_demo::Tdx0547Record,
+    decimal_point: u8,
+) -> Option<f64> {
+    let amount = record.amount?;
+    // Production 实时.dat category values and 网际风.exe 0x40a130 agree on these
+    // mode boundaries; unknown security classes retain the decoded 0547 value.
+    let mode = match record.market {
+        1 if record.code.starts_with("000") => OemPublicAmountMode::Index,
+        0 if record.code.starts_with("399") => OemPublicAmountMode::Index,
+        2 if record.code.starts_with("899") => OemPublicAmountMode::Index,
+        1 if ["60", "68", "90", "51", "56", "58"]
+            .iter()
+            .any(|prefix| record.code.starts_with(prefix)) =>
+        {
+            OemPublicAmountMode::PriceRelative
+        }
+        0 if ["00", "20", "15", "30"]
+            .iter()
+            .any(|prefix| record.code.starts_with(prefix)) =>
+        {
+            OemPublicAmountMode::PriceRelative
+        }
+        _ => OemPublicAmountMode::Direct,
+    };
+    if matches!(mode, OemPublicAmountMode::Direct) {
+        return Some(amount);
+    }
+
+    let volume = record.volume? as f32;
+    let amount = amount as f32;
+    if volume == 0.0 {
+        return Some(0.0);
+    }
+
+    let public = match mode {
+        OemPublicAmountMode::Index => {
+            let per_unit = amount / volume;
+            let offset = per_unit - 1_000.0_f32;
+            let scaled = offset * 100.0_f32;
+            let encoded = (scaled + 0.5_f32).trunc() as i32;
+            let decoded = encoded as f32 / 100.0_f32;
+            let per_unit = decoded + 1_000.0_f32;
+            per_unit * volume
+        }
+        OemPublicAmountMode::PriceRelative => {
+            let price_raw = (record.quote_head.as_ref()?.price * 100.0).round() as i32;
+            let hand = 100.0_f32;
+            let point_scale = 10_f32.powi(i32::from(decimal_point));
+            let per_unit = amount / volume;
+            let per_share = per_unit / hand;
+            let scaled_price = per_share * point_scale;
+            let price_offset = scaled_price - price_raw as f32;
+            let scaled_offset = price_offset * 30.0_f32;
+            let encoded = (scaled_offset + 0.5_f32).trunc() as i32;
+            let decoded_offset = encoded as f32 / 30.0_f32;
+            let decoded_price = decoded_offset + price_raw as f32;
+            let decoded_per_share = decoded_price * volume;
+            let decoded_per_hand = decoded_per_share * hand;
+            decoded_per_hand / point_scale
+        }
+        OemPublicAmountMode::Direct => unreachable!(),
+    };
+    Some(f64::from(public))
 }
 
 fn tdx7709_kline_response_from_result(
@@ -2989,11 +3107,64 @@ async fn hqw_publish_worklist(
     if !(1..=6_000).contains(&limit) {
         return Err(ApiError::bad_request("limit must be between 1 and 6000"));
     }
+    let worker_count = request
+        .worker_count
+        .or_else(|| {
+            std::env::var("NETZIP_FULL_PUSH_WORKERS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+        })
+        .unwrap_or(4);
+    validated_full_push_worker_count(worker_count, 1)?;
     let gateway_addr = std::env::var("NETZIP_QUOTE_GATEWAY_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:16886".to_string());
     let current_token = std::env::var("NETZIP_QUOTE_GATEWAY_NETZIP_RUST_7709_TOKEN").ok();
     let response = tokio::task::spawn_blocking(move || {
-        execute_hqw_publish_worklist(gateway_addr, current_token.as_deref(), batch_size, limit)
+        execute_hqw_publish_worklist(
+            gateway_addr,
+            current_token.as_deref(),
+            batch_size,
+            limit,
+            worker_count,
+        )
+    })
+    .await
+    .map_err(|err| ApiError::internal(format!("join error: {err}")))??;
+    Ok(Json(response))
+}
+
+async fn hqw_push_worklist(
+    Json(request): Json<HqwPushWorklistRequest>,
+) -> Result<Json<HqwPushWorklistResponse>, ApiError> {
+    let duration_secs = request.duration_secs.unwrap_or(240);
+    if !(5..=600).contains(&duration_secs) {
+        return Err(ApiError::bad_request(
+            "duration_secs must be between 5 and 600",
+        ));
+    }
+    let audit_interval_secs = request.audit_interval_secs.unwrap_or(30);
+    if !(10..=300).contains(&audit_interval_secs) {
+        return Err(ApiError::bad_request(
+            "audit_interval_secs must be between 10 and 300",
+        ));
+    }
+    let publish = request.publish.unwrap_or(false);
+    if publish && std::env::var("NETZIP_NATIVE_PUSH_PUBLISH_ENABLE").as_deref() != Ok("1") {
+        return Err(ApiError::bad_request(
+            "native push publication requires NETZIP_NATIVE_PUSH_PUBLISH_ENABLE=1",
+        ));
+    }
+    let gateway_addr = std::env::var("NETZIP_QUOTE_GATEWAY_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:16886".to_string());
+    let current_token = std::env::var("NETZIP_QUOTE_GATEWAY_NETZIP_RUST_7709_TOKEN").ok();
+    let response = tokio::task::spawn_blocking(move || {
+        execute_hqw_push_worklist(
+            gateway_addr,
+            current_token,
+            Duration::from_secs(duration_secs),
+            Duration::from_secs(audit_interval_secs),
+            publish,
+        )
     })
     .await
     .map_err(|err| ApiError::internal(format!("join error: {err}")))??;
@@ -5681,6 +5852,34 @@ fn split_full_push_batches(
     Ok(symbols.chunks(batch_size).map(<[String]>::to_vec).collect())
 }
 
+fn validated_full_push_worker_count(
+    requested: usize,
+    batch_count: usize,
+) -> Result<usize, ApiError> {
+    if !(1..=16).contains(&requested) {
+        return Err(ApiError::bad_request(
+            "worker_count must be between 1 and 16",
+        ));
+    }
+    Ok(requested.min(batch_count))
+}
+
+fn shard_full_push_batches(
+    batches: Vec<Vec<String>>,
+    worker_count: usize,
+) -> Vec<Vec<(usize, Vec<String>)>> {
+    if batches.is_empty() || worker_count == 0 {
+        return Vec::new();
+    }
+    let mut shards = (0..worker_count)
+        .map(|_| Vec::new())
+        .collect::<Vec<Vec<(usize, Vec<String>)>>>();
+    for (index, batch) in batches.into_iter().enumerate() {
+        shards[index % worker_count].push((index, batch));
+    }
+    shards
+}
+
 fn retry_full_push_batch<T, E>(
     max_attempts: usize,
     mut request: impl FnMut() -> Result<T, E>,
@@ -5820,12 +6019,323 @@ fn partition_hqw_quotes(
     (publishable, missing_codes)
 }
 
+enum NativePushReaderMessage {
+    Record {
+        shard: usize,
+        record: netzipapi_rust_demo::Tdx0547Record,
+    },
+    Healthy {
+        shard: usize,
+    },
+    Failed {
+        shard: usize,
+        error: String,
+    },
+}
+
+fn compact_quote_from_push_record(
+    record: &netzipapi_rust_demo::Tdx0547Record,
+    code_table_lookup: &BTreeMap<String, Quote0547CodeTableInfo>,
+    worklist_names: &BTreeMap<String, String>,
+) -> Option<CompactQuote> {
+    let symbol = tdx_0547_record_symbol(record)?;
+    let decimal_point = resolve_quote_0547_decimal_point(record, None, code_table_lookup)?;
+    let head = record
+        .quote_head
+        .as_ref()
+        .and_then(|head| tdx_0547_normalize_quote_head(head, decimal_point))?;
+    let market = tdx_0547_market_name(record.market)?;
+    let quote_datetime = tdx_0547_public_time_hhmmss(record);
+    Some(CompactQuote {
+        code: record.code.clone(),
+        symbol: symbol.clone(),
+        market: market.to_string(),
+        name: worklist_names.get(&symbol).cloned().or_else(|| {
+            lookup_quote_0547_code_table_info(record, code_table_lookup)
+                .map(|info| info.name.clone())
+        }),
+        price: head.price,
+        last_close: head.last_close,
+        open: head.open,
+        high: head.high,
+        low: head.low,
+        volume: record.volume,
+        amount: oem_public_amount(record, decimal_point),
+        datetime: quote_datetime.clone(),
+        quote_datetime,
+        source: "netzip-rust-7709-push",
+    })
+}
+
+fn flush_native_push_quotes(
+    coalescer: &mut TdxPushCoalescer<CompactQuote>,
+    now_ms: u64,
+    force: bool,
+    trade_date: &str,
+    gateway_addr: &str,
+    current_token: Option<&str>,
+    publish: bool,
+    protocol: &mut GatewayPublishProtocol,
+) -> Result<(usize, usize, usize), ApiError> {
+    let batches = if force {
+        coalescer.drain()
+    } else {
+        coalescer.drain_ready(Duration::from_millis(now_ms))
+    };
+    let mut published = 0usize;
+    let mut unchanged = 0usize;
+    let mut publish_batches = 0usize;
+    for batch in batches {
+        let quotes = batch
+            .into_iter()
+            .map(|event| event.value)
+            .collect::<Vec<_>>();
+        let (quotes, batch_unchanged) =
+            select_new_full_push_quotes(full_push_last_published_at(), trade_date, quotes);
+        unchanged = unchanged.saturating_add(batch_unchanged);
+        if quotes.is_empty() || !publish {
+            continue;
+        }
+        let payload = build_netzip_rust_7709_quote_batch(&quotes, trade_date)?;
+        post_quote_gateway_batch_auto(gateway_addr, current_token, &payload, protocol)?;
+        record_published_full_push_quotes(full_push_last_published_at(), trade_date, &quotes);
+        published = published.saturating_add(quotes.len());
+        publish_batches = publish_batches.saturating_add(1);
+    }
+    Ok((published, unchanged, publish_batches))
+}
+
+fn execute_hqw_push_worklist(
+    gateway_addr: String,
+    current_token: Option<String>,
+    duration: Duration,
+    audit_interval: Duration,
+    publish: bool,
+) -> Result<HqwPushWorklistResponse, ApiError> {
+    let overall_started_at = Instant::now();
+    let worklist_payload = get_gateway_worklist(&gateway_addr, 6_000)?;
+    let worklist = parse_gateway_worklist(&worklist_payload)?;
+    let (primary_symbols, _) = split_full_push_upstreams(&worklist.symbols);
+    let batches = split_full_push_batches(&primary_symbols, 100)?;
+    let code_table = Tdx7709Session::open(&Tdx7709Config::default())
+        .map_err(|err| ApiError::internal(format!("open push code-table session failed: {err}")))?
+        .sync_result();
+    let code_table_lookup = build_quote_0547_code_table_lookup(&code_table.records);
+    let started_at = Instant::now();
+    let deadline = started_at + duration;
+    let (sender, receiver) = mpsc::channel::<NativePushReaderMessage>();
+    let shard_count = batches.len();
+
+    std::thread::scope(|scope| -> Result<HqwPushWorklistResponse, ApiError> {
+        for (shard, symbols) in batches.into_iter().enumerate() {
+            let sender = sender.clone();
+            scope.spawn(move || {
+                let request_items = symbols
+                    .iter()
+                    .filter_map(|symbol| normalize_live_quote_symbol(symbol).ok())
+                    .map(|item| Tdx7709QuoteRequestItem {
+                        market: item.market,
+                        code: item.code,
+                        token: 0,
+                    })
+                    .collect::<Vec<_>>();
+                while Instant::now() < deadline {
+                    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                        let mut session =
+                            Tdx7709Session::open_quote_only(&Tdx7709Config::default())?;
+                        let initial = session.request_live_quotes(&request_items)?;
+                        let _ = sender.send(NativePushReaderMessage::Healthy { shard });
+                        for record in initial
+                            .quote_bodies
+                            .into_iter()
+                            .flat_map(|body| body.records)
+                        {
+                            if sender
+                                .send(NativePushReaderMessage::Record { shard, record })
+                                .is_err()
+                            {
+                                return Ok(());
+                            }
+                        }
+                        while Instant::now() < deadline {
+                            let remaining = deadline.saturating_duration_since(Instant::now());
+                            let observation = session.collect_quote_delivery_observation(
+                                remaining.min(Duration::from_millis(250)),
+                            )?;
+                            for record in observation
+                                .deliveries
+                                .into_iter()
+                                .flat_map(|timed| timed.delivery.body.records)
+                            {
+                                if sender
+                                    .send(NativePushReaderMessage::Record { shard, record })
+                                    .is_err()
+                                {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        Ok(())
+                    })();
+                    if let Err(error) = result {
+                        let _ = sender.send(NativePushReaderMessage::Failed {
+                            shard,
+                            error: error.to_string(),
+                        });
+                        std::thread::sleep(
+                            deadline
+                                .saturating_duration_since(Instant::now())
+                                .min(Duration::from_secs(1)),
+                        );
+                    }
+                }
+            });
+        }
+        drop(sender);
+
+        let mut coalescer =
+            TdxPushCoalescer::new(Duration::from_millis(100), 100).map_err(ApiError::internal)?;
+        let mut protocol = GatewayPublishProtocol::Auto;
+        let mut received_records = 0usize;
+        let mut converted_records = 0usize;
+        let mut published_records = 0usize;
+        let mut unchanged_records = 0usize;
+        let mut publish_batches = 0usize;
+        let mut reader_failures = 0usize;
+        let mut reader_recoveries = 0usize;
+        let mut failed_shards = BTreeSet::new();
+        let mut audit_runs = 0usize;
+        let mut audit_failures = 0usize;
+        let mut next_audit_at = started_at + audit_interval;
+        let mut audit_handle = None;
+
+        while Instant::now() < deadline {
+            let now = Instant::now();
+            let wait = deadline
+                .saturating_duration_since(now)
+                .min(Duration::from_millis(25));
+            match receiver.recv_timeout(wait) {
+                Ok(NativePushReaderMessage::Record { shard, record }) => {
+                    let _ = shard;
+                    received_records = received_records.saturating_add(1);
+                    if let Some(quote) =
+                        compact_quote_from_push_record(&record, &code_table_lookup, &worklist.names)
+                    {
+                        let source_time = record.time_hhmmss_raw.unwrap_or_default();
+                        coalescer.push(
+                            started_at.elapsed(),
+                            TdxPushEvent {
+                                symbol: quote.symbol.clone(),
+                                source_time,
+                                value: quote,
+                            },
+                        );
+                        converted_records = converted_records.saturating_add(1);
+                    }
+                }
+                Ok(NativePushReaderMessage::Healthy { shard }) => {
+                    if failed_shards.remove(&shard) {
+                        reader_recoveries = reader_recoveries.saturating_add(1);
+                    }
+                }
+                Ok(NativePushReaderMessage::Failed { shard, error }) => {
+                    eprintln!("native push shard {shard} failed: {error}");
+                    failed_shards.insert(shard);
+                    reader_failures = reader_failures.saturating_add(1);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+
+            let (published, unchanged, batches) = flush_native_push_quotes(
+                &mut coalescer,
+                started_at.elapsed().as_millis() as u64,
+                false,
+                &worklist.trade_date,
+                &gateway_addr,
+                current_token.as_deref(),
+                publish,
+                &mut protocol,
+            )?;
+            published_records = published_records.saturating_add(published);
+            unchanged_records = unchanged_records.saturating_add(unchanged);
+            publish_batches = publish_batches.saturating_add(batches);
+
+            if audit_handle
+                .as_ref()
+                .is_some_and(std::thread::JoinHandle::is_finished)
+            {
+                let result = audit_handle.take().expect("finished audit handle").join();
+                audit_runs = audit_runs.saturating_add(1);
+                if !matches!(result, Ok(Ok(_))) {
+                    audit_failures = audit_failures.saturating_add(1);
+                }
+            }
+            if publish && Instant::now() >= next_audit_at && audit_handle.is_none() {
+                let audit_gateway = gateway_addr.clone();
+                let audit_token = current_token.clone();
+                audit_handle = Some(std::thread::spawn(move || {
+                    execute_hqw_publish_worklist(
+                        audit_gateway,
+                        audit_token.as_deref(),
+                        100,
+                        6_000,
+                        8,
+                    )
+                }));
+                next_audit_at = Instant::now() + audit_interval;
+            }
+        }
+
+        let (published, unchanged, batches) = flush_native_push_quotes(
+            &mut coalescer,
+            started_at.elapsed().as_millis() as u64,
+            true,
+            &worklist.trade_date,
+            &gateway_addr,
+            current_token.as_deref(),
+            publish,
+            &mut protocol,
+        )?;
+        published_records = published_records.saturating_add(published);
+        unchanged_records = unchanged_records.saturating_add(unchanged);
+        publish_batches = publish_batches.saturating_add(batches);
+        if let Some(handle) = audit_handle {
+            audit_runs = audit_runs.saturating_add(1);
+            if !matches!(handle.join(), Ok(Ok(_))) {
+                audit_failures = audit_failures.saturating_add(1);
+            }
+        }
+
+        Ok(HqwPushWorklistResponse {
+            success: true,
+            publish,
+            trade_date: worklist.trade_date,
+            worklist_count: worklist.symbols.len(),
+            subscribed_count: primary_symbols.len(),
+            shard_count,
+            received_records,
+            converted_records,
+            published_records,
+            unchanged_records,
+            publish_batches,
+            reader_failures,
+            reader_recoveries,
+            audit_runs,
+            audit_failures,
+            elapsed_ms: overall_started_at.elapsed().as_millis(),
+        })
+    })
+}
+
 fn execute_hqw_publish_worklist(
     gateway_addr: String,
     current_token: Option<&str>,
     batch_size: usize,
     limit: usize,
+    worker_count: usize,
 ) -> Result<HqwPublishWorklistResponse, ApiError> {
+    let started_at = Instant::now();
     let worklist_payload = get_gateway_worklist(&gateway_addr, limit)?;
     let worklist = parse_gateway_worklist(&worklist_payload)?;
     let mut gateway_protocol = GatewayPublishProtocol::Auto;
@@ -5841,6 +6351,7 @@ fn execute_hqw_publish_worklist(
         &worklist.names,
         &gateway_addr,
         current_token,
+        worker_count,
         &mut gateway_protocol,
     )?;
     fallback_symbols.splice(0..0, primary.missing_codes);
@@ -5863,6 +6374,7 @@ fn execute_hqw_publish_worklist(
         &worklist.names,
         &gateway_addr,
         current_token,
+        worker_count,
         &mut gateway_protocol,
     )?;
     let last_gateway_response = fallback
@@ -5876,9 +6388,17 @@ fn execute_hqw_publish_worklist(
         trade_date: worklist.trade_date,
         worklist_count: worklist.symbols.len(),
         batch_size,
+        worker_count,
         batch_count: primary.batch_count + fallback.batch_count,
         primary_batch_count: primary.batch_count,
+        primary_worker_count: primary.worker_count,
+        primary_elapsed_ms: primary.elapsed_ms,
+        primary_slowest_batch_ms: primary.slowest_batch_ms,
         fallback_batch_count: fallback.batch_count,
+        fallback_worker_count: fallback.worker_count,
+        fallback_elapsed_ms: fallback.elapsed_ms,
+        fallback_slowest_batch_ms: fallback.slowest_batch_ms,
+        elapsed_ms: started_at.elapsed().as_millis(),
         fallback_host,
         fallback_published_count: fallback.published_count,
         published_count: primary.published_count + fallback.published_count,
@@ -5900,37 +6420,135 @@ fn publish_full_push_stage(
     worklist_names: &BTreeMap<String, String>,
     gateway_addr: &str,
     current_token: Option<&str>,
+    requested_worker_count: usize,
     gateway_protocol: &mut GatewayPublishProtocol,
 ) -> Result<FullPushStageResult, ApiError> {
+    let started_at = Instant::now();
     let batches = split_full_push_batches(symbols, batch_size)?;
     if batches.is_empty() {
         return Ok(FullPushStageResult {
             batch_count: 0,
+            worker_count: 0,
+            elapsed_ms: started_at.elapsed().as_millis(),
+            slowest_batch_ms: 0,
+            total_batch_elapsed_ms: 0,
             published_count: 0,
             unchanged_count: 0,
             missing_codes: Vec::new(),
             last_gateway_response: None,
         });
     }
-    let session_key = format!("{}:{}", config.host, config.port);
+    let batch_count = batches.len();
+    let worker_count = validated_full_push_worker_count(requested_worker_count, batch_count)?;
+    let shards = shard_full_push_batches(batches, worker_count);
+    let worker_results = std::thread::scope(|scope| {
+        let handles = shards
+            .into_iter()
+            .enumerate()
+            .map(|(worker_index, shard)| {
+                scope.spawn(move || {
+                    publish_full_push_worker(
+                        stage,
+                        worker_index,
+                        config,
+                        shard,
+                        batch_count,
+                        trade_date,
+                        fallback_quote_time,
+                        worklist_names,
+                        gateway_addr,
+                        current_token,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle.join().map_err(|_| {
+                    ApiError::internal(format!("7709 {stage} full-push worker panicked"))
+                })?
+            })
+            .collect::<Result<Vec<_>, ApiError>>()
+    })?;
+
+    let mut result = FullPushStageResult {
+        batch_count,
+        worker_count,
+        elapsed_ms: started_at.elapsed().as_millis(),
+        slowest_batch_ms: 0,
+        total_batch_elapsed_ms: 0,
+        published_count: 0,
+        unchanged_count: 0,
+        missing_codes: Vec::new(),
+        last_gateway_response: None,
+    };
+    for (worker, protocol) in worker_results {
+        result.published_count = result
+            .published_count
+            .saturating_add(worker.published_count);
+        result.unchanged_count = result
+            .unchanged_count
+            .saturating_add(worker.unchanged_count);
+        result.total_batch_elapsed_ms = result
+            .total_batch_elapsed_ms
+            .saturating_add(worker.total_batch_elapsed_ms);
+        result.slowest_batch_ms = result.slowest_batch_ms.max(worker.slowest_batch_ms);
+        result.missing_codes.extend(worker.missing_codes);
+        if worker.last_gateway_response.is_some() {
+            result.last_gateway_response = worker.last_gateway_response;
+        }
+        merge_gateway_protocol(gateway_protocol, protocol);
+    }
+    result.elapsed_ms = started_at.elapsed().as_millis();
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_full_push_worker(
+    stage: &str,
+    worker_index: usize,
+    config: &Tdx7709Config,
+    batches: Vec<(usize, Vec<String>)>,
+    total_batch_count: usize,
+    trade_date: &str,
+    fallback_quote_time: &str,
+    worklist_names: &BTreeMap<String, String>,
+    gateway_addr: &str,
+    current_token: Option<&str>,
+) -> Result<(FullPushStageResult, GatewayPublishProtocol), ApiError> {
+    let started_at = Instant::now();
+    let session_key = format!(
+        "{stage}:{}:{}:worker-{worker_index}",
+        config.host, config.port
+    );
     let cache = full_push_session_cache();
     let mut session = take_full_push_session(cache, &session_key);
     if session.is_none() {
         session = Some(Tdx7709Session::open(config).map_err(|err| {
             ApiError::internal(format!(
-                "open 7709 {stage} full-push session {} failed: {err}",
+                "open 7709 {stage} full-push worker {worker_index} session {} failed: {err}",
                 config.host
             ))
         })?);
     }
 
-    let stage_result = (|| -> Result<FullPushStageResult, ApiError> {
-        let mut published_count = 0usize;
-        let mut unchanged_count = 0usize;
-        let mut missing_codes = Vec::new();
-        let mut last_gateway_response = None;
+    let mut protocol = GatewayPublishProtocol::Auto;
+    let worker_result = (|| -> Result<FullPushStageResult, ApiError> {
+        let mut result = FullPushStageResult {
+            batch_count: batches.len(),
+            worker_count: 1,
+            elapsed_ms: 0,
+            slowest_batch_ms: 0,
+            total_batch_elapsed_ms: 0,
+            published_count: 0,
+            unchanged_count: 0,
+            missing_codes: Vec::new(),
+            last_gateway_response: None,
+        };
 
-        for (index, symbols) in batches.iter().enumerate() {
+        for (index, symbols) in &batches {
+            let batch_started_at = Instant::now();
             let normalized = symbols
                 .iter()
                 .map(|symbol| normalize_live_quote_symbol(symbol))
@@ -5944,7 +6562,7 @@ fn publish_full_push_stage(
                     token: 0,
                 })
                 .collect::<Vec<_>>();
-            let result = retry_full_push_with_reopen(
+            let quote_result = retry_full_push_with_reopen(
                 3,
                 &mut session,
                 || Tdx7709Session::open(config),
@@ -5954,10 +6572,10 @@ fn publish_full_push_stage(
                 ApiError::internal(format!(
                     "7709 {stage} full-push batch {}/{} failed after 3 fresh-session attempts: {err}",
                     index + 1,
-                    batches.len()
+                    total_batch_count
                 ))
             })?;
-            let mut quotes = compact_quotes_response_from_result(&normalized, &result);
+            let mut quotes = compact_quotes_response_from_result(&normalized, &quote_result);
             for quote in &mut quotes.data {
                 if quote.quote_datetime.is_none() {
                     quote.quote_datetime = Some(fallback_quote_time.to_string());
@@ -5967,41 +6585,53 @@ fn publish_full_push_stage(
             apply_worklist_names(&mut quotes.data, worklist_names);
             let (publishable, batch_missing) =
                 partition_hqw_quotes(quotes.data, quotes.missing_codes);
-            missing_codes.extend(batch_missing);
+            result.missing_codes.extend(batch_missing);
             let (publishable, batch_unchanged) =
                 select_new_full_push_quotes(full_push_last_published_at(), trade_date, publishable);
-            unchanged_count = unchanged_count.saturating_add(batch_unchanged);
+            result.unchanged_count = result.unchanged_count.saturating_add(batch_unchanged);
             if publishable.is_empty() {
+                let batch_elapsed_ms = batch_started_at.elapsed().as_millis();
+                result.total_batch_elapsed_ms = result
+                    .total_batch_elapsed_ms
+                    .saturating_add(batch_elapsed_ms);
+                result.slowest_batch_ms = result.slowest_batch_ms.max(batch_elapsed_ms);
                 continue;
             }
             let current_payload = build_netzip_rust_7709_quote_batch(&publishable, trade_date)?;
-            last_gateway_response = Some(post_quote_gateway_batch_auto(
+            result.last_gateway_response = Some(post_quote_gateway_batch_auto(
                 gateway_addr,
                 current_token,
                 &current_payload,
-                gateway_protocol,
+                &mut protocol,
             )?);
             record_published_full_push_quotes(
                 full_push_last_published_at(),
                 trade_date,
                 &publishable,
             );
-            published_count += publishable.len();
+            result.published_count += publishable.len();
+            let batch_elapsed_ms = batch_started_at.elapsed().as_millis();
+            result.total_batch_elapsed_ms = result
+                .total_batch_elapsed_ms
+                .saturating_add(batch_elapsed_ms);
+            result.slowest_batch_ms = result.slowest_batch_ms.max(batch_elapsed_ms);
         }
-
-        Ok(FullPushStageResult {
-            batch_count: batches.len(),
-            published_count,
-            unchanged_count,
-            missing_codes,
-            last_gateway_response,
-        })
+        result.elapsed_ms = started_at.elapsed().as_millis();
+        Ok(result)
     })();
 
     if let Some(session) = session {
         cache_full_push_session(cache, &session_key, session);
     }
-    stage_result
+    worker_result.map(|result| (result, protocol))
+}
+
+fn merge_gateway_protocol(current: &mut GatewayPublishProtocol, candidate: GatewayPublishProtocol) {
+    if matches!(candidate, GatewayPublishProtocol::NetzipRust7709Tcp)
+        || matches!(current, GatewayPublishProtocol::Auto)
+    {
+        *current = candidate;
+    }
 }
 
 fn apply_worklist_names(quotes: &mut [CompactQuote], worklist_names: &BTreeMap<String, String>) {
@@ -6107,7 +6737,7 @@ fn build_quote_gateway_quote_batch(
             "low": quote.low,
             "volume": volume,
             "amount": amount,
-            "source_protocol": "netzip-rust-7709-0547.v2"
+            "source_protocol": "netzip-rust-7709-0547.v3"
         }));
     }
     Ok(serde_json::json!({
@@ -6402,10 +7032,48 @@ mod tests {
         quote_0547_quote_head_state_label, quote_0547_state_matrix_label,
         quote_0547_time_presence_label, quote_decimal_point_fallback, quote_frame_scan_summary,
         recommended_delivery_tracks, record_published_full_push_quotes, retry_full_push_batch,
-        retry_full_push_with_reopen, select_new_full_push_quotes, split_full_push_batches,
-        split_full_push_upstreams, stable_endpoints, take_full_push_session,
-        tdx_0547_public_time_hhmmss, top_scoped_source_groups,
+        retry_full_push_with_reopen, select_new_full_push_quotes, shard_full_push_batches,
+        split_full_push_batches, split_full_push_upstreams, stable_endpoints,
+        take_full_push_session, tdx_0547_public_time_hhmmss, top_scoped_source_groups,
+        validated_full_push_worker_count,
     };
+
+    #[test]
+    fn full_push_workers_are_bounded_by_batches_and_safety_limit() {
+        assert_eq!(validated_full_push_worker_count(4, 58).unwrap(), 4);
+        assert_eq!(validated_full_push_worker_count(4, 2).unwrap(), 2);
+        assert_eq!(validated_full_push_worker_count(4, 0).unwrap(), 0);
+        assert!(validated_full_push_worker_count(0, 58).is_err());
+        assert!(validated_full_push_worker_count(17, 58).is_err());
+    }
+
+    #[test]
+    fn full_push_batches_are_balanced_across_workers() {
+        let batches = (0..10)
+            .map(|index| vec![format!("SH{index:06}")])
+            .collect::<Vec<_>>();
+
+        let shards = shard_full_push_batches(batches, 4);
+
+        assert_eq!(
+            shards.iter().map(Vec::len).collect::<Vec<_>>(),
+            [3, 3, 2, 2]
+        );
+        assert_eq!(
+            shards[0]
+                .iter()
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>(),
+            [0, 4, 8]
+        );
+        assert_eq!(
+            shards[1]
+                .iter()
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>(),
+            [1, 5, 9]
+        );
+    }
 
     #[test]
     fn full_push_result_calls_unreturned_quotes_no_current_quote() {
@@ -6416,9 +7084,17 @@ mod tests {
             trade_date: "2026-07-27".to_string(),
             worklist_count: 2,
             batch_size: 100,
+            worker_count: 4,
             batch_count: 1,
             primary_batch_count: 1,
+            primary_worker_count: 1,
+            primary_elapsed_ms: 125,
+            primary_slowest_batch_ms: 120,
             fallback_batch_count: 0,
+            fallback_worker_count: 0,
+            fallback_elapsed_ms: 0,
+            fallback_slowest_batch_ms: 0,
+            elapsed_ms: 126,
             fallback_host: "127.0.0.1".to_string(),
             fallback_published_count: 0,
             published_count: 1,
@@ -6436,6 +7112,9 @@ mod tests {
         );
         assert!(json.get("missing_count").is_none());
         assert!(json.get("missing_codes").is_none());
+        assert_eq!(json["worker_count"], 4);
+        assert_eq!(json["primary_worker_count"], 1);
+        assert_eq!(json["elapsed_ms"], 126);
     }
 
     #[test]
@@ -6818,6 +7497,8 @@ mod tests {
         assert!(linux_native_endpoints().contains(&"POST /api/hqw/publish"));
         assert!(stable_endpoints().contains(&"POST /api/hqw/publish-worklist"));
         assert!(linux_native_endpoints().contains(&"POST /api/hqw/publish-worklist"));
+        assert!(stable_endpoints().contains(&"POST /api/hqw/push-worklist"));
+        assert!(linux_native_endpoints().contains(&"POST /api/hqw/push-worklist"));
         assert!(stable_endpoints().contains(&"POST /api/tdx7709/snapshot"));
         assert!(linux_native_endpoints().contains(&"POST /api/tdx7709/snapshot"));
         assert!(stable_endpoints().contains(&"POST /api/linux/pure-rust-mvp"));
@@ -6909,7 +7590,7 @@ mod tests {
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["source"], "netzip-rust-7709");
         assert_eq!(json["data"][0]["volume"], 506_751.0);
-        assert_eq!(json["data"][0]["amount"], 459_285_312.0);
+        assert_eq!(json["data"][0]["amount"], 459_285_344.0);
 
         let current_batch =
             build_netzip_rust_7709_quote_batch(&response.data, "2026-07-24").unwrap();
@@ -6926,8 +7607,156 @@ mod tests {
         );
         assert_eq!(
             current_batch["quotes"][0]["source_protocol"],
-            "netzip-rust-7709-0547.v2"
+            "netzip-rust-7709-0547.v3"
         );
+    }
+
+    #[test]
+    fn compact_quote_response_matches_wine_oem_public_amount() {
+        let requested = parse_compact_quote_codes("SH510300").unwrap();
+        let mut meta = [0u8; 13];
+        meta[4] = 3;
+        let result = Tdx7709LiveQuoteResult {
+            code_table_reply: Vec::new(),
+            code_table_frames: Vec::new(),
+            code_table_records: vec![Tdx7709CodeTableRecord {
+                market: 1,
+                code: "510300".to_string(),
+                name: "300ETF".to_string(),
+                meta,
+            }],
+            quote_reply: Vec::new(),
+            quote_frames: Vec::new(),
+            quote_bodies: vec![Tdx0547Body {
+                xor93_count: Some(1),
+                printable_ratio: 0.0,
+                records: vec![Tdx0547Record {
+                    start: 0,
+                    len: 0,
+                    market: 1,
+                    code: "510300".to_string(),
+                    active1_raw: Some(5_078),
+                    time_hhmmss_raw: Some(153045),
+                    extra0_time_hhmmss: None,
+                    extra0_raw: Some(-5_461),
+                    extra1_raw: Some(2),
+                    extra2_raw: Some(0),
+                    extra3_raw: Some(930_500),
+                    volume: Some(15_092_028.0),
+                    current_volume: Some(175_499.0),
+                    amount: Some(6_987_965_952.0),
+                    amount_raw: Some(1_339_048_435),
+                    quote_head: Some(Tdx0547QuoteHead {
+                        active1: 5_078,
+                        price: 46.57,
+                        last_close: 46.27,
+                        open: 46.24,
+                        high: 46.86,
+                        low: 45.74,
+                    }),
+                }],
+            }],
+        };
+
+        let response = compact_quotes_response_from_result(&requested, &result);
+
+        assert_eq!(response.data[0].amount, Some(6_988_011_008.0));
+        assert_eq!(
+            result.quote_bodies[0].records[0].amount,
+            Some(6_987_965_952.0)
+        );
+        assert_eq!(
+            result.quote_bodies[0].records[0].amount_raw,
+            Some(1_339_048_435)
+        );
+    }
+
+    #[test]
+    fn compact_quote_response_matches_observed_oem_amount_modes() {
+        assert_eq!(
+            compact_amount_for_observed_record(1, "511010", 3, 1_408.27, 74_227.0, 1_045_378_432.0),
+            Some(1_045_378_368.0)
+        );
+        assert_eq!(
+            compact_amount_for_observed_record(0, "159919", 3, 48.57, 2_092_755.0, 1_010_141_888.0),
+            Some(1_010_151_936.0)
+        );
+        assert_eq!(
+            compact_amount_for_observed_record(1, "688001", 2, 46.16, 107_005.0, 482_548_544.0),
+            Some(482_553_312.0)
+        );
+        assert_eq!(
+            compact_amount_for_observed_record(
+                0,
+                "399001",
+                2,
+                13_658.44,
+                675_056_732.0,
+                1_209_171_312_640.0,
+            ),
+            Some(1_209_168_297_984.0)
+        );
+        assert_eq!(
+            compact_amount_for_observed_record(0, "123064", 3, 1_101.19, 122_303.0, 134_716_736.0,),
+            Some(134_716_736.0)
+        );
+    }
+
+    fn compact_amount_for_observed_record(
+        market: u8,
+        code: &str,
+        decimal_point: u8,
+        price: f64,
+        volume: f64,
+        amount: f64,
+    ) -> Option<f64> {
+        let market_name = netzipapi_rust_demo::tdx_0547_market_name(market).expect("known market");
+        let requested = parse_compact_quote_codes(&format!("{market_name}{code}")).unwrap();
+        let mut meta = [0u8; 13];
+        meta[4] = decimal_point;
+        let result = Tdx7709LiveQuoteResult {
+            code_table_reply: Vec::new(),
+            code_table_frames: Vec::new(),
+            code_table_records: vec![Tdx7709CodeTableRecord {
+                market,
+                code: code.to_string(),
+                name: "observed".to_string(),
+                meta,
+            }],
+            quote_reply: Vec::new(),
+            quote_frames: Vec::new(),
+            quote_bodies: vec![Tdx0547Body {
+                xor93_count: Some(1),
+                printable_ratio: 0.0,
+                records: vec![Tdx0547Record {
+                    start: 0,
+                    len: 0,
+                    market,
+                    code: code.to_string(),
+                    active1_raw: Some(1),
+                    time_hhmmss_raw: Some(150000),
+                    extra0_time_hhmmss: None,
+                    extra0_raw: None,
+                    extra1_raw: None,
+                    extra2_raw: None,
+                    extra3_raw: None,
+                    volume: Some(volume),
+                    current_volume: Some(0.0),
+                    amount: Some(amount),
+                    amount_raw: None,
+                    quote_head: Some(Tdx0547QuoteHead {
+                        active1: 1,
+                        price,
+                        last_close: price,
+                        open: price,
+                        high: price,
+                        low: price,
+                    }),
+                }],
+            }],
+        };
+
+        compact_quotes_response_from_result(&requested, &result).data[0].amount
     }
 
     #[test]
