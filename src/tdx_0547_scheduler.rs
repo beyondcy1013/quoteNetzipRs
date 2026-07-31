@@ -5,6 +5,7 @@ const MIN_RESPONSE_INTERVAL_MS: u64 = 2_000;
 pub struct RenewalRequestItem {
     pub market: u8,
     pub code: String,
+    pub token: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -13,6 +14,7 @@ pub struct RenewalSecurity {
     code: String,
     last_request_ms: u64,
     last_response_ms: u64,
+    token: u32,
 }
 
 impl RenewalSecurity {
@@ -27,6 +29,7 @@ impl RenewalSecurity {
             code: code.into(),
             last_request_ms,
             last_response_ms,
+            token: 0,
         }
     }
 
@@ -77,9 +80,21 @@ impl QuoteRenewalScheduler {
                 RenewalRequestItem {
                     market: security.market,
                     code: security.code.clone(),
+                    token: security.token,
                 }
             })
             .collect()
+    }
+
+    pub fn record_response(&mut self, market: u8, code: &str, token: u32, now_ms: u64) {
+        if let Some(security) = self
+            .securities
+            .iter_mut()
+            .find(|security| security.market == market && security.code == code)
+        {
+            security.token = token;
+            security.last_response_ms = now_ms;
+        }
     }
 }
 
@@ -115,5 +130,19 @@ mod tests {
 
         assert_eq!(scheduler.take_due(2_000, 1)[0].code, "000001");
         assert_eq!(scheduler.take_due(2_000, 1)[0].code, "600000");
+    }
+
+    #[test]
+    fn response_rearms_security_with_latest_vendor_token() {
+        let mut scheduler = QuoteRenewalScheduler::new([RenewalSecurity::new(
+            1, "600000", 0, 0,
+        )]);
+
+        scheduler.record_response(1, "600000", 0x1234_5678, 1_000);
+
+        assert!(scheduler.take_due(2_999, 100).is_empty());
+        let due = scheduler.take_due(3_000, 100);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].token, 0x1234_5678);
     }
 }

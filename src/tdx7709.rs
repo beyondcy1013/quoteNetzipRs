@@ -254,6 +254,15 @@ impl Tdx7709Session {
         })
     }
 
+    pub fn send_live_quote_renewal(
+        &mut self,
+        items: &[Tdx7709QuoteRequestItem],
+    ) -> Result<(), Box<dyn Error>> {
+        let request = build_quote_0547_renewal_request(items)?;
+        self.stream.write_all(&request)?;
+        Ok(())
+    }
+
     pub fn collect_quote_deliveries(
         &mut self,
         observe_for: Duration,

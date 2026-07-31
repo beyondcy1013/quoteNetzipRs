@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
 };
 use netzipapi_rust_demo::tdx_push_coalescer::{TdxPushCoalescer, TdxPushEvent};
+use netzipapi_rust_demo::tdx_0547_scheduler::{QuoteRenewalScheduler, RenewalSecurity};
 use netzipapi_rust_demo::{
     FIN_GETTER_UNRESOLVED_IDS, ProtoProbeConfig, ProtoProbeEncoding as ProbeEncoding,
     QuoteReplayConfig, SH_FIN_URL, SZ_FIN_URL, Tdx7709Config, Tdx7709QuoteRequestItem,
@@ -619,6 +620,7 @@ struct HqwPushWorklistResponse {
     publish_batches: usize,
     reader_failures: usize,
     reader_recoveries: usize,
+    renewal_requests: usize,
     audit_runs: usize,
     audit_failures: usize,
     elapsed_ms: u128,
@@ -6050,6 +6052,7 @@ enum NativePushReaderMessage {
         shard: usize,
         error: String,
     },
+    RenewalSent,
 }
 
 fn compact_quote_from_push_record(
@@ -6168,15 +6171,29 @@ fn execute_hqw_push_worklist(
                     .collect::<Vec<_>>();
                 while Instant::now() < deadline {
                     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+                        let session_started_at = Instant::now();
                         let mut session =
                             Tdx7709Session::open_quote_only(&Tdx7709Config::default())?;
                         let initial = session.request_live_quotes(&request_items)?;
+                        let mut renewal_scheduler = QuoteRenewalScheduler::new(
+                            request_items.iter().map(|item| {
+                                RenewalSecurity::new(item.market, item.code.clone(), 0, 0)
+                            }),
+                        );
                         let _ = sender.send(NativePushReaderMessage::Healthy { shard });
                         for record in initial
                             .quote_bodies
                             .into_iter()
                             .flat_map(|body| body.records)
                         {
+                            if let Some(token) = record.renewal_token_raw {
+                                renewal_scheduler.record_response(
+                                    record.market,
+                                    &record.code,
+                                    token,
+                                    session_started_at.elapsed().as_millis() as u64,
+                                );
+                            }
                             if sender
                                 .send(NativePushReaderMessage::Record { shard, record })
                                 .is_err()
@@ -6194,12 +6211,36 @@ fn execute_hqw_push_worklist(
                                 .into_iter()
                                 .flat_map(|timed| timed.delivery.body.records)
                             {
+                                if let Some(token) = record.renewal_token_raw {
+                                    renewal_scheduler.record_response(
+                                        record.market,
+                                        &record.code,
+                                        token,
+                                        session_started_at.elapsed().as_millis() as u64,
+                                    );
+                                }
                                 if sender
                                     .send(NativePushReaderMessage::Record { shard, record })
                                     .is_err()
                                 {
                                     return Ok(());
                                 }
+                            }
+                            let due = renewal_scheduler.take_due(
+                                session_started_at.elapsed().as_millis() as u64,
+                                100,
+                            );
+                            if !due.is_empty() {
+                                let renewals = due
+                                    .into_iter()
+                                    .map(|item| Tdx7709QuoteRequestItem {
+                                        market: item.market,
+                                        code: item.code,
+                                        token: item.token,
+                                    })
+                                    .collect::<Vec<_>>();
+                                session.send_live_quote_renewal(&renewals)?;
+                                let _ = sender.send(NativePushReaderMessage::RenewalSent);
                             }
                         }
                         Ok(())
@@ -6231,6 +6272,7 @@ fn execute_hqw_push_worklist(
         let mut publish_batches = 0usize;
         let mut reader_failures = 0usize;
         let mut reader_recoveries = 0usize;
+        let mut renewal_requests = 0usize;
         let mut failed_shards = BTreeSet::new();
         let mut audit_runs = 0usize;
         let mut audit_failures = 0usize;
@@ -6272,6 +6314,9 @@ fn execute_hqw_push_worklist(
                     eprintln!("native push shard {shard} failed: {error}");
                     failed_shards.insert(shard);
                     reader_failures = reader_failures.saturating_add(1);
+                }
+                Ok(NativePushReaderMessage::RenewalSent) => {
+                    renewal_requests = renewal_requests.saturating_add(1);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -6353,6 +6398,7 @@ fn execute_hqw_push_worklist(
             publish_batches,
             reader_failures,
             reader_recoveries,
+            renewal_requests,
             audit_runs,
             audit_failures,
             elapsed_ms: overall_started_at.elapsed().as_millis(),
