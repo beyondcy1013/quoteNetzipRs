@@ -7,6 +7,15 @@ interval_secs="${NETZIP_FULL_PUSH_INTERVAL_SECS:-5}"
 idle_interval_secs="${NETZIP_FULL_PUSH_IDLE_INTERVAL_SECS:-5}"
 batch_size="${NETZIP_FULL_PUSH_BATCH_SIZE:-100}"
 limit="${NETZIP_FULL_PUSH_LIMIT:-6000}"
+worker_count="${NETZIP_FULL_PUSH_WORKERS:-8}"
+push_mode="${NETZIP_FULL_PUSH_MODE:-poll}"
+native_session_secs="${NETZIP_NATIVE_PUSH_SESSION_SECS:-240}"
+native_audit_interval_secs="${NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS:-30}"
+
+if [[ "$push_mode" != "poll" && "$push_mode" != "push" ]]; then
+    echo "NETZIP_FULL_PUSH_MODE must be poll or push" >&2
+    exit 2
+fi
 
 current_weekday_clock() {
     if [[ -n "${NETZIP_FULL_PUSH_NOW:-}" ]]; then
@@ -35,8 +44,15 @@ session_end_for() {
     return 1
 }
 
+clock_to_seconds() {
+    local clock="$1"
+    local hour=$((10#${clock:0:2}))
+    local minute=$((10#${clock:2:2}))
+    local second=$((10#${clock:4:2}))
+    printf '%s\n' $((hour * 3600 + minute * 60 + second))
+}
+
 worklist_url="http://$gateway_addr/api/codes/worklist?include_unknown=true&include_halted=false&limit=1"
-publish_url="http://$service_addr/api/hqw/publish-worklist"
 outside_window_logged=0
 last_worklist_wait=""
 
@@ -66,9 +82,32 @@ while :; do
     as_of_date="$(jq -r '.payload.as_of_date // ""' <<<"$worklist" 2>/dev/null || true)"
     trade_date="$(jq -r '.payload.freshness.required_quote_trade_date // ""' <<<"$worklist" 2>/dev/null || true)"
     if [[ "${NETZIP_FULL_PUSH_FORCE:-0}" == "1" || ( -n "$as_of_date" && "$as_of_date" == "$trade_date" ) ]]; then
-        publish_result="$(curl --noproxy '*' -sS --max-time 300 --write-out $'\n%{http_code}' -X POST "$publish_url" \
-            -H 'Content-Type: application/json' \
-            -d "{\"batch_size\":$batch_size,\"limit\":$limit}")"
+        if [[ "$push_mode" == "push" ]]; then
+            remaining_secs=$(( $(clock_to_seconds "$session_end") - $(clock_to_seconds "$clock") ))
+            if (( remaining_secs < 5 )); then
+                should_backoff=1
+                if [[ "${NETZIP_FULL_PUSH_ONCE:-0}" == "1" ]]; then
+                    break
+                fi
+                sleep "$interval_secs"
+                continue
+            fi
+            run_secs="$native_session_secs"
+            if (( run_secs > remaining_secs )); then
+                run_secs="$remaining_secs"
+            fi
+            request_timeout=$((run_secs + 60))
+            publish_stage="push-worklist"
+            publish_url="http://$service_addr/api/hqw/push-worklist"
+            publish_body="{\"duration_secs\":$run_secs,\"audit_interval_secs\":$native_audit_interval_secs,\"publish\":true}"
+        else
+            request_timeout=300
+            publish_stage="publish-worklist"
+            publish_url="http://$service_addr/api/hqw/publish-worklist"
+            publish_body="{\"batch_size\":$batch_size,\"limit\":$limit,\"worker_count\":$worker_count}"
+        fi
+        publish_result="$(curl --noproxy '*' -sS --max-time "$request_timeout" --write-out $'\n%{http_code}' -X POST "$publish_url" \
+            -H 'Content-Type: application/json' -d "$publish_body")"
         curl_status=$?
         if [[ "$publish_result" == *$'\n'* ]]; then
             http_status="${publish_result##*$'\n'}"
@@ -78,14 +117,14 @@ while :; do
             publish_response="$publish_result"
         fi
         if (( curl_status != 0 )) || [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
-            echo "netzip full push failed: stage=publish-worklist http_status=$http_status curl_status=$curl_status; retrying after ${interval_secs}s" >&2
+            echo "netzip full push failed: stage=$publish_stage http_status=$http_status curl_status=$curl_status; retrying after ${interval_secs}s" >&2
             if [[ -n "$publish_response" ]]; then
                 printf 'netzip full push response_body=%s\n' "$publish_response" >&2
             fi
             should_backoff=1
         else
             printf '%s\n' "$publish_response"
-            published_count="$(jq -r '.published_count // 0' <<<"$publish_response" 2>/dev/null || printf '0')"
+            published_count="$(jq -r '.published_count // .published_records // 0' <<<"$publish_response" 2>/dev/null || printf '0')"
             if [[ "$published_count" == "0" ]]; then
                 should_backoff=1
             fi
