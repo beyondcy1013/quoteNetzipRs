@@ -7257,10 +7257,14 @@ mod tests {
     }
 
     #[test]
-    fn beijing_quotes_default_to_two_decimal_places_without_a_code_table_row() {
-        assert_eq!(quote_decimal_point_fallback(2), Some(2));
-        assert_eq!(quote_decimal_point_fallback(0), None);
-        assert_eq!(quote_decimal_point_fallback(1), None);
+    fn stock_ranges_default_to_two_decimal_places_without_a_code_table_row() {
+        assert_eq!(quote_decimal_point_fallback(2, "920001"), Some(2));
+        assert_eq!(quote_decimal_point_fallback(1, "600238"), Some(2));
+        assert_eq!(quote_decimal_point_fallback(1, "688680"), Some(2));
+        assert_eq!(quote_decimal_point_fallback(0, "000001"), Some(2));
+        assert_eq!(quote_decimal_point_fallback(0, "300750"), Some(2));
+        assert_eq!(quote_decimal_point_fallback(1, "511010"), None);
+        assert_eq!(quote_decimal_point_fallback(0, "159919"), None);
     }
 
     #[test]
