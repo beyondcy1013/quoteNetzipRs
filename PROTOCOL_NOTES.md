@@ -1081,17 +1081,49 @@
   - 当前量 `7687`
   - 成交额 `393449088`
   - 对应 OEM 公共累计量为 `392440`
-- 成交额仍未闭环，不允许按表面差值加固定补偿。`5194` 个可比样本中，
-  `Wine.amount - Rust.amount` 为正、负、相等的数量分别为 `3492 / 1670 / 32`，
-  差值和 ULP 差都没有固定模式。历史 OEM 对象中 `SH600000` 的公共 `amount` 为
-  `393447264`，内部 `nowa` 为 `393449088`；后者与现有 wire 样本相同，但当前没有证据
-  证明它们来自同一帧。
-- 现存 `120.195.71.160:7709 <-> 192.168.3.38:2400` pcap 可重组出服务端
-  `445457` 字节、`53` 帧，但数据恰好结束在 `0x0547` 之前，不能用于同帧成交额对照。
-- 当前生产 DLL 是 `/home/third_party/quoteNetzipWine/Stock.dll`，SHA-256 为
-  `524f3d11ab53211d437ded738bb1a00d29b11a16aed8167518c9aa982a9084df`。
-  本文旧版本 DLL 的函数地址不能直接套用到该文件；必须重新定位当前版本的
-  “内部实时对象 -> OEM_REPORT”转换器后，才能继续判定公共 `amount` 的生成逻辑。
+- 初始对比曾确认成交额不能按固定偏移补偿：`5194` 个可比样本中，
+  `Wine.amount - Rust.amount` 为正、负、相等的数量分别为 `3492 / 1670 / 32`。
+  这不是噪声，而是公共对象的类别相关有损量化结果。
+
+### `0x0547` 成交额公共口径（2026-07-30）
+
+- 根因位于生产 `/home/third_party/quoteNetzipWine/网际风.exe` 的内部实时对象编码，
+  不是 `0x0547` 游标、quoteGateway 或 `Stock.dll`：
+  - `0x483a9c` 把原始 0547 成交额写入内部对象。
+  - `0x40a130` 按证券 category 分组。
+  - `0x40aeb0` 在保存内部对象时压缩成交额，`0x40acc0` 在公共读取时解压。
+  - `0x4a7890` 把内部对象转换为公共结构。
+- category `0 / 15 / 86` 使用指数模式：
+
+  `encoded = trunc((f32(amount / volume) - 1000) * 100 + 0.5)`
+
+  `public = f32((encoded / 100 + 1000) * volume)`
+
+- category `1 / 2 / 3 / 7 / 8 / 9 / 10 / 11 / 16 / 17 / 18 / 22 / 23 / 26`
+  使用当前价相对模式：
+
+  `encoded = trunc((f32(amount / volume / hand * 10^pointNum) - price_raw) * 30 + 0.5)`
+
+  `public = f32((encoded / 30 + price_raw) * volume * hand / 10^pointNum)`
+
+  每一步都按 IEEE `f32` 舍入；生产股票、ETF 和科创板实测 `hand=100`。其它 category
+  走通用浮点编码，当前可转债样本的公共值与原始 `f32` 相同。
+- `实时.dat` 的 category 与代码范围交叉验证为：沪市指数 `SH00=0`、深市指数
+  `SZ39=15`；沪市股票/B 股/ETF/科创板为 `1/2/7/9`；深市股票/B 股/ETF/创业板为
+  `16/17/22/26`；沪深可转债为 `5/20`。因此 Rust 只对已验证范围启用对应模式，未知
+  证券类别保留原始值，不根据表面差值猜测。
+- 独立闭市样本逐位命中 Wine 公共值：
+  - `SH510300 6987965952 -> 6988011008`
+  - `SH511010 1045378432 -> 1045378368`
+  - `SZ159919 1010141888 -> 1010151936`
+  - `SZ399001 1209171312640 -> 1209168297984`
+  - `SH688001 482548544 -> 482553312`
+- quoteGateway 工作表有 `5533` 只证券；Wine/Rust 同时覆盖 `5193` 只，其中同 datetime、
+  同 volume 的 `5181` 只全部逐位命中上述公共公式。其余 12 只输入快照不同，不能用于
+  同输入公式验证；约 340 只北交所证券不在 Wine 支持范围内。
+- `Tdx0547Record.amount / amount_raw` 保持原始诊断语义。只有 CompactQuote 与
+  quoteGateway payload 应用公共量化，并以 `netzip-rust-7709-0547.v3` 标记；下游仅允许
+  同 datetime 的 v2 行迁移到 v3，不放宽普通 stale/conflict 规则。
 
 ## 当前未确认
 
@@ -1566,7 +1598,7 @@
 - `实时数据` 这一层，这轮已经基本钉死成 `OEM_REPORT(pack=1)` 映射，不再只是“像 500 字节对象”：
   - 本节地址来自当时分析的 DLL 样本，是历史结构证据。当前生产公共时间行为以
     前述 `网际风.exe 0x4839a3 -> 0x438800` 为准，不能把下列地址直接套到当前 DLL。
-  - 头文件 [OemStock.h](/home/codes/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 已确认有：
+  - 头文件 [OemStock.h](/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 已确认有：
     - `#pragma pack(push, 1)`
     - `struct OEM_REPORT // 实时数据，500 字节`
   - `0x10083980`
@@ -1635,7 +1667,7 @@
       - `last / limitUp / limitDown` 分别来自 getter `0x10005130 / 0x10005160 / 0x100051c0`
       - `isIndex / isDaPan / isStock / bsNum` 分别来自 `this + 0xb0 / 0xb2 / 0xb1 / 0xb5`
     - 这里还有一个容易忽略的细节：
-      - [OemStock.h](/home/codes/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里这几组盘口数组声明成了 `float [10]`
+      - [OemStock.h](/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里这几组盘口数组声明成了 `float [10]`
       - 但 `0x1007ef80` 当前只显式循环填了前 `5` 档
       - 这和注释里的“申卖价1..5 / 申买价1..5”是一致的，只是结构体槽位预留得更大
   - 这意味着：
@@ -1670,7 +1702,7 @@
   - 现在更准确地说，是 `OEM_MARKETINFO + OEM_STKINFO[]` 的代码表初始化导出器：
     - `0x10083a00(base) = base + 0xc8`
     - `0x100839c0(n) = 0xc8 + n * 0xfa`
-    - [OemStock.h](/home/codes/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里：
+    - [OemStock.h](/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里：
       - `offsetof(OEM_MARKETINFO, stkInfo) = 0xc8`
       - `sizeof(OEM_STKINFO) = 0xfa = 250`
   - 几个关键字段已经能对上：
@@ -1697,7 +1729,7 @@
   - `0x1007de80`
     - 分配大小是 `0x3e8 + count * 0xc8`
     - 尾部会用 `(payload_len - 0xc8) / 0xc8` 回算条数
-    - 这和 [OemStock.h](/home/codes/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里：
+    - 这和 [OemStock.h](/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里：
       - `OEM_SPLIT_HEAD = 0xc8 = 200`
       - `OEM_SPLIT = 0xc8 = 200`
       - 完全一致
@@ -1927,3 +1959,23 @@ cargo run --example dll_call_xrefs -- ./netzip_api_bin/NetzipAPI/StockC++/Stock6
 ```
 
 可用于继续试验不同发送格式。
+
+## 2026-07-31 原生 7709 推送交易时段证据
+
+- 原生会话订阅后停止发请求，5 秒内收到 6 条 `op=0/sub=0x2900/tag=0x0547`
+  raw 更新和 0 条 solicited 回包，确认 7709 支持真正的服务器主动下发。
+- 同一连接连续发送五批 100 条订阅后，推送只命中最后一批；每次 0547 请求会替换该连接的
+  当前订阅集合，而不是累积订阅。Wine 抓包也反复出现 `count=0x0064` 和 1104 字节请求体，
+  说明每连接 100 条是原生协议形态。
+- 5 个轻量行情连接订阅 500 条时，五批均收到推送；20 个连接订阅 2000 条时，全部返回
+  初始快照且没有连接失败。轻量连接只执行三帧 bootstrap，不重复下载 53 批代码表。
+- 使用 quoteGateway 当前工作表的 5204 个沪深标的，53 个轻量连接在 30 秒内收到 18,243 条
+  unsolicited 更新，覆盖 4936 个发生变化的标的（94.85%）。所有 53 个批次均有命中，
+  无重连、无解码残片；源时间到本机接收时间为 p50 799 ms、p95 2054 ms、最大 2381 ms。
+- 同时段现有 8-worker 完整轮询通常需要约 4.4..10.7 秒，并观测到 12.5 秒长尾。
+- 对同一全市场影子流做 50/100/200/500/1000 ms 合并窗口模拟，10 秒样本分别需要
+  232/168/152/132/126 个最多 100 条的输出批次。100 ms 到 200 ms 只减少约 9.5% 批次，
+  却增加 100 ms 固定等待，因此后续发布器应优先采用 100 ms 合并窗口。
+- 当前实现仍是隔离影子探针，不向 quoteGateway 发布，也没有替换生产轮询。安全集成方向是：
+  沪深使用 53 个持久订阅连接连续读，100 ms 内按标的保留最新记录并分成最多 100 条的批次；
+  北交所 331 条和现有轮询均保留为恢复/覆盖兜底。

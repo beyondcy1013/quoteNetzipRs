@@ -17,7 +17,11 @@ pub mod packet;
 pub mod stock_message;
 pub mod tdx7709;
 pub mod tdx_0547;
+pub mod tdx_0547_delivery;
+pub mod tdx_0547_scheduler;
 pub mod tdx_fin;
+pub mod tdx_push_coalescer;
+pub mod tdx_push_poll_policy;
 pub mod tdx_wire_finance;
 
 pub(crate) fn repository_fixture_path(relative: &str) -> std::path::PathBuf {

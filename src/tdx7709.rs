@@ -1,11 +1,12 @@
 use crate::tdx_0547::{Tdx0547Body, parse_tdx_0547_body};
+use crate::tdx_0547_delivery::{Tdx0547Delivery, Tdx0547DeliveryDecoder};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use encoding_rs::GBK;
 use flate2::read::ZlibDecoder;
@@ -116,6 +117,21 @@ pub struct Tdx7709LiveQuoteResult {
 }
 
 #[derive(Clone, Debug)]
+pub struct Tdx7709TimedQuoteDelivery {
+    pub received_at: SystemTime,
+    pub delivery: Tdx0547Delivery,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Tdx7709QuoteObservation {
+    pub deliveries: Vec<Tdx7709TimedQuoteDelivery>,
+    pub bytes_read: usize,
+    pub read_count: usize,
+    pub timeout_count: usize,
+    pub pending_bytes: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct Tdx7709KlineBar {
     pub market: u8,
     pub code: String,
@@ -179,7 +195,11 @@ pub struct Tdx7709Session {
 
 impl Tdx7709Session {
     pub fn open(config: &Tdx7709Config) -> Result<Self, Box<dyn Error>> {
-        open_tdx7709_session_impl(config)
+        open_tdx7709_session_impl(config, true)
+    }
+
+    pub fn open_quote_only(config: &Tdx7709Config) -> Result<Self, Box<dyn Error>> {
+        open_tdx7709_session_impl(config, false)
     }
 
     pub fn sync_result(&self) -> Tdx7709SyncResult {
@@ -231,6 +251,76 @@ impl Tdx7709Session {
             quote_frames,
             quote_bodies,
         })
+    }
+
+    pub fn collect_quote_deliveries(
+        &mut self,
+        observe_for: Duration,
+    ) -> Result<Vec<Tdx0547Delivery>, Box<dyn Error>> {
+        let observation = self.collect_quote_delivery_observation(observe_for)?;
+        if observation.pending_bytes != 0 {
+            return Err(format!(
+                "observation ended with {} bytes of a partial server16 frame",
+                observation.pending_bytes
+            )
+            .into());
+        }
+        Ok(observation
+            .deliveries
+            .into_iter()
+            .map(|timed| timed.delivery)
+            .collect())
+    }
+
+    pub fn collect_quote_delivery_observation(
+        &mut self,
+        observe_for: Duration,
+    ) -> Result<Tdx7709QuoteObservation, Box<dyn Error>> {
+        if observe_for.is_zero() {
+            return Ok(Tdx7709QuoteObservation::default());
+        }
+        let deadline = Instant::now() + observe_for;
+        let mut decoder = Tdx0547DeliveryDecoder::default();
+        let mut observation = Tdx7709QuoteObservation::default();
+        let mut buf = [0u8; 65_536];
+        let result = (|| -> Result<(), Box<dyn Error>> {
+            while Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                self.stream.set_read_timeout(Some(
+                    remaining.min(self.read_timeout.max(Duration::from_millis(1))),
+                ))?;
+                match self.stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let received_at = SystemTime::now();
+                        observation.bytes_read += n;
+                        observation.read_count += 1;
+                        observation
+                            .deliveries
+                            .extend(decoder.push(&buf[..n])?.into_iter().map(|delivery| {
+                                Tdx7709TimedQuoteDelivery {
+                                    received_at,
+                                    delivery,
+                                }
+                            }));
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        ) =>
+                    {
+                        observation.timeout_count += 1
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Ok(())
+        })();
+        self.stream.set_read_timeout(Some(self.read_timeout))?;
+        result?;
+        observation.pending_bytes = decoder.pending_bytes();
+        Ok(observation)
     }
 
     pub fn request_kline(
@@ -848,7 +938,10 @@ fn build_code_table_chunk_request(bucket: u16, offset: u16) -> [u8; 6] {
     out
 }
 
-fn open_tdx7709_session_impl(config: &Tdx7709Config) -> Result<Tdx7709Session, Box<dyn Error>> {
+fn open_tdx7709_session_impl(
+    config: &Tdx7709Config,
+    sync_code_table: bool,
+) -> Result<Tdx7709Session, Box<dyn Error>> {
     let bootstrap0 = decode_hex(BOOTSTRAP0_BODY_HEX)?;
     let bootstrap2 = decode_hex(BOOTSTRAP2_BODY_HEX)?;
 
@@ -882,36 +975,45 @@ fn open_tdx7709_session_impl(config: &Tdx7709Config) -> Result<Tdx7709Session, B
         &mut reply_stream,
     )?;
 
-    let mut chunk_index = 0u16;
-    for bucket in 0u16..=1 {
-        let max_offset = if bucket == 0 { 22_000 } else { 26_000 };
-        for offset in (0u16..=max_offset).step_by(1_000) {
-            let request = build_client10_frame(
-                0x040c + (chunk_index << 8),
-                if bucket == 0 { 0x6d00 } else { 0x6e00 },
-                0x0100,
-                &build_code_table_chunk_request(bucket, offset),
-            );
-            send_and_collect(
-                &mut stream,
-                &request,
-                config.read_timeout,
-                config.settle_delay,
-                &mut reply_stream,
-            )?;
-            chunk_index += 1;
+    if sync_code_table {
+        let mut chunk_index = 0u16;
+        for bucket in 0u16..=1 {
+            let max_offset = if bucket == 0 { 22_000 } else { 26_000 };
+            for offset in (0u16..=max_offset).step_by(1_000) {
+                let request = build_client10_frame(
+                    0x040c + (chunk_index << 8),
+                    if bucket == 0 { 0x6d00 } else { 0x6e00 },
+                    0x0100,
+                    &build_code_table_chunk_request(bucket, offset),
+                );
+                send_and_collect(
+                    &mut stream,
+                    &request,
+                    config.read_timeout,
+                    config.settle_delay,
+                    &mut reply_stream,
+                )?;
+                chunk_index += 1;
+            }
         }
     }
 
     let frames = parse_server16_stream(&reply_stream)?;
-    if frames.len() < 53 {
-        return Err(format!("expected at least 53 reply frames, got {}", frames.len()).into());
+    let minimum_frames = if sync_code_table { 53 } else { 3 };
+    if frames.len() < minimum_frames {
+        return Err(format!(
+            "expected at least {minimum_frames} reply frames, got {}",
+            frames.len()
+        )
+        .into());
     }
 
     let mut records = BTreeMap::<(u8, String), Tdx7709CodeTableRecord>::new();
-    for (chunk_index, frame) in frames.iter().skip(3).enumerate() {
-        let market = if chunk_index < 23 { 0 } else { 1 };
-        ingest_code_table_reply(frame, market, &mut records)?;
+    if sync_code_table {
+        for (chunk_index, frame) in frames.iter().skip(3).enumerate() {
+            let market = if chunk_index < 23 { 0 } else { 1 };
+            ingest_code_table_reply(frame, market, &mut records)?;
+        }
     }
 
     Ok(Tdx7709Session {
