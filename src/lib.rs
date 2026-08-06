@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth_credentials;
 pub mod auth_7100_flow_matrix;
 pub mod auth_7100_prefix;
 pub mod auth_client_shell;

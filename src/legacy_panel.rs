@@ -1,4 +1,5 @@
 use crate::{
+    auth_credentials,
     DownloadedServerConfig, ProtoProbeConfig, ProtoProbeEncoding,
     load_downloaded_server_config_sample, probe_proto,
 };
@@ -44,6 +45,7 @@ pub struct LegacyDataServer {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LegacyPanelConfig {
     pub account: String,
+    #[serde(skip_serializing)]
     pub password: String,
     pub account_expiry: String,
     pub analysis_software: String,
@@ -623,6 +625,13 @@ fn normalize_config(
     mut config: LegacyPanelConfig,
     auth_servers: &[LegacyAuthServer],
 ) -> LegacyPanelConfig {
+    // The Rust path uses the real production account. A deployed secret may override only
+    // the password; an old panel-state account must not silently select account 168/168.
+    let credentials = auth_credentials::load(None, Some(&config.password));
+    config.account = credentials.account;
+    if let Some(password) = credentials.password {
+        config.password = password;
+    }
     config.selected_auth_server = normalize_auth_choice(&config.selected_auth_server, auth_servers);
     if config.selected_stock_backup_server.trim().is_empty() {
         config.selected_stock_backup_server = "南京移动".to_string();
