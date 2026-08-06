@@ -12,6 +12,29 @@
 
 本项目继承 `/home/codes/AGENTS.MD` 的公共执行策略、上下文记忆规则、系统级硬约束、服务部署总约定和文档分层规则。若本文件与上级系统目标冲突，以上级为准。
 
+## Project Highest Goal
+
+Provide a correct, timely, observable, and progressively Wine-independent Netzip market-data client
+for the stock system, while retaining the vendor client as a controlled comparison anchor until the
+native Rust chain has equivalent production evidence.
+
+## Current Market Client Progress
+
+- The Linux-native `7709` path provides code-table synchronization, live quotes, K-line, F10, FIN,
+  and `0547` parsing through CLI and HTTP entry points.
+- Native account `1522` authentication to remote `7100` succeeds with the verified three-response
+  sequence, but it is currently a standalone Rust module/CLI rather than a resident service session.
+- `netzip-rs.service` and `netzip-rs-full-push.service` are deployed under `/home/bin/netzip/` and
+  publish native Rust quotes to quoteGateway.
+- Commit `28ea978` bounded the gateway TCP client cache after thread-keyed entries exhausted file
+  descriptors with retained `CLOSE-WAIT` sockets. Post-deployment idle checks reported `fd=7` and
+  `CLOSE-WAIT=0`; trading-load acceptance remains required.
+- Wine remains the behavioral comparison source for the local `2000` bridge, post-login object
+  chain, field parity, and long-lived same-account behavior.
+
+The living progress, evidence, acceptance criteria, and unresolved issues are maintained in
+[`docs/codex/tasks/netzip-rs-client-progress.md`](docs/codex/tasks/netzip-rs-client-progress.md).
+
 ## 修复 Bug 的根本原则
 
 本规则与 `/home/codes/AGENTS.MD` 中的同名章节完全一致，是 `netzipapi-rust-demo` 项目排障的最高优先级准则，在此显式重复一次以避免被忽略。
