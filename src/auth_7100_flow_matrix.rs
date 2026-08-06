@@ -205,15 +205,24 @@ pub fn analyze_auth_7100_flow_matrix(
 }
 
 fn discover_7100_endpoints(packets: &[TcpPacket]) -> Result<(Ipv4Addr, Endpoint), Box<dyn Error>> {
-    let packet = packets
-        .iter()
-        .find(|packet| packet.src.port == 7100 || packet.dst.port == 7100)
-        .ok_or("capture contains no TCP/7100 packets")?;
-    if packet.src.port == 7100 {
-        Ok((packet.dst.ip, packet.src))
-    } else {
-        Ok((packet.src.ip, packet.dst))
+    let mut candidates = BTreeMap::<(Ipv4Addr, Endpoint), usize>::new();
+    for packet in packets {
+        let candidate = if packet.src.port == 7100 {
+            Some((packet.dst.ip, packet.src))
+        } else if packet.dst.port == 7100 {
+            Some((packet.src.ip, packet.dst))
+        } else {
+            None
+        };
+        if let Some(candidate) = candidate {
+            *candidates.entry(candidate).or_default() += 1;
+        }
     }
+    candidates
+        .into_iter()
+        .max_by_key(|(_, packet_count)| *packet_count)
+        .map(|(candidate, _)| candidate)
+        .ok_or_else(|| "capture contains no TCP/7100 packets".into())
 }
 
 fn classify_session(
