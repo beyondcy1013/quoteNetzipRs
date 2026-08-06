@@ -8,7 +8,7 @@
 - 遇到 `rtk` 不支持的复杂 shell、`find` 谓词或原始管道语法时，使用 `rtk proxy <command>` 执行原始命令。
 - 可用 `rtk --version`、`rtk gain`、`which rtk` 验证 RTK 是否生效。
 
-本文件适用于整个 `/home/codes/netzipapi-rust-demo` 仓库。
+本文件适用于整个 `/home/codes/quoteNetzipRs` 仓库。
 
 本项目继承 `/home/codes/AGENTS.MD` 的公共执行策略、上下文记忆规则、系统级硬约束、服务部署总约定和文档分层规则。若本文件与上级系统目标冲突，以上级为准。
 
@@ -37,7 +37,7 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 
 ## 修复 Bug 的根本原则
 
-本规则与 `/home/codes/AGENTS.MD` 中的同名章节完全一致，是 `netzipapi-rust-demo` 项目排障的最高优先级准则，在此显式重复一次以避免被忽略。
+本规则与 `/home/codes/AGENTS.MD` 中的同名章节完全一致，是 `quoteNetzipRs` 项目排障的最高优先级准则，在此显式重复一次以避免被忽略。
 
 - **故障内容是指示，不是目标**。报错信息、异常值、错误状态、日志堆栈、监控告警、用户投诉等，都只是指向问题根因的线索，不是要去消除的对象。
 - 修复 Bug 的正确做法是**顺着故障内容往上追，一直追到真正出问题的上游逻辑，并修正那一层**；故障只是下游的投影，掩盖下游投影不会让上游逻辑变正确。禁止在下游故障出现的位置就地“处理”掉：吞异常、静默兜底、把错误状态伪装成成功、用假数据替换真实数据、绕过触发条件、关掉告警、注释掉错误分支、加一段只在表象上让结果正常的补丁等。
@@ -59,7 +59,7 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 本项目的重要参考目录（已移入本项目内）：
 
 - 相对路径：`./netzip_api_bin/NetzipAPI`
-- 绝对路径：`/home/codes/netzipapi-rust-demo/netzip_api_bin/NetzipAPI`
+- 绝对路径：`/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI`
 
 这个目录不是当前 Rust 项目生成的内容，而是网际风官方/历史样本/配套资源的参考资料集合。当前仓库中的很多结论、默认文件路径、请求串格式和运行依赖，都是从这个参考目录抽出来的。
 
@@ -169,7 +169,7 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 在这个仓库里工作时，应遵守下面的约定：
 
 1. 把 `./netzip_api_bin/NetzipAPI` 当成”参考资料目录”，不是当前仓库的实现目录。
-2. 当前仓库优先修改 `/home/codes/netzipapi-rust-demo` 内的代码和文档；不要无意修改参考目录。
+2. 当前仓库优先修改 `/home/codes/quoteNetzipRs` 内的代码和文档；不要无意修改参考目录。
 3. 遇到以下问题时，应优先回查参考目录：
    - DLL 导出签名不确定
    - 请求串字段含义不确定

@@ -73,7 +73,7 @@ v2 缓存行迁移到 v3，跨交易日和普通同版本冲突仍按原规则�
 本项目有一个重要的参考目录（已移入本项目内）：
 
 - 相对路径：`./netzip_api_bin/NetzipAPI`
-- 绝对路径：`/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI`
+- 绝对路径：`/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI`
 
 这个目录保存了官方/历史样本中的接口规范、C++/C#/Python 示例、DLL 与配置文件、服务器列表和相关资源。当前仓库中的 DLL 调用方式、请求串格式、运行依赖、抓包分析结论，都需要和这个参考目录交叉核对。
 
@@ -499,23 +499,23 @@ curl -fsS -X POST http://127.0.0.1:16893/api/debug/quote-frame-scan \
   -d '{"path":"/tmp/flow_7709_2400.bin"}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/quote-replay \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/tmp/flow_2655_7709_probe.bin","host":"120.195.71.160","port":7709}'
+  -d '{"path":"/home/codes/quoteNetzipRs/tmp/flow_2655_7709_probe.bin","host":"120.195.71.160","port":7709}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/proto-probe \
   -H 'Content-Type: application/json' \
   -d '{"host":"120.195.71.160","port":7709,"payload":"0c0100000000020002001500","encoding":"hex","read_secs":1}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/pcap-summary \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/tmp/netzip_full_tcp.pcap","segment_limit":12}'
+  -d '{"path":"/home/codes/quoteNetzipRs/tmp/netzip_full_tcp.pcap","segment_limit":12}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/local-2000-log-scan \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","port":2000,"small_max":4096,"code_preview_limit":20}'
+  -d '{"path":"/home/codes/quoteNetzipRs/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","port":2000,"small_max":4096,"code_preview_limit":20}'
 curl -fsS http://127.0.0.1:16893/api/debug/local-2000-vs-auth-7100
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/local-2000-vs-auth-7100 \
   -H 'Content-Type: application/json' \
-  -d '{"local_log_path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","auth_pcap_path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/tmp/netzip_full_tcp.pcap"}'
+  -d '{"local_log_path":"/home/codes/quoteNetzipRs/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","auth_pcap_path":"/home/codes/quoteNetzipRs/tmp/netzip_full_tcp.pcap"}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/stream-analyze \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/quoteNetzipRs/netzipapi-rust-demo/captured_windows_traffic/client_to_server_full.raw","is_hex":false}'
+  -d '{"path":"/home/codes/quoteNetzipRs/captured_windows_traffic/client_to_server_full.raw","is_hex":false}'
 ```
 
 `GET /api/quotes` 是面向 `quote-gateway` 的紧凑生产契约，数据链为
@@ -645,8 +645,8 @@ journalctl -u netzip-rs-full-push.service -f
   - 新一轮对位也已经把“首个对齐之后的分叉”量出来了：远端第二个 `penc@416` 落在 `payload boundary` 后 `348` 字节，而本地大对象里后续 `penc` 当前落在 `payload boundary` 后 `2 / 190 / 53888` 字节；首个 marker 已对齐，后续 deeper shell 仍未对齐
 - `quote-frame-scan` 会附带一个轻量摘要，直接显示 `7709/7719` 这类 bootstrap 标签、代码表请求计数、`phase_order / phase_counts`，以及首个 `0x7b00` 主站校验帧“去掉前置 tag 后”的 `8-byte` 块统计
   - 当前已能自动标出 `post-login.bulk-record-29b-*`、`post-login.fin-143b-*`、`post-login.quote-0547-*`、`post-login.quote-054c-*` 这几段登录后阶段
-- Windows 动态取证步骤单独写在 [TDX118_DUMP_GUIDE.md](/home/codes/quoteNetzipRs/netzipapi-rust-demo/TDX118_DUMP_GUIDE.md)
-- 如果怀疑之前抓包混入了通达信或其它证券软件的连接，先按 [WINDOWS_PROCESS_CAPTURE_GUIDE.md](/home/codes/quoteNetzipRs/netzipapi-rust-demo/WINDOWS_PROCESS_CAPTURE_GUIDE.md) 做“按目标进程归因”的干净抓包
+- Windows 动态取证步骤单独写在 [TDX118_DUMP_GUIDE.md](/home/codes/quoteNetzipRs/TDX118_DUMP_GUIDE.md)
+- 如果怀疑之前抓包混入了通达信或其它证券软件的连接，先按 [WINDOWS_PROCESS_CAPTURE_GUIDE.md](/home/codes/quoteNetzipRs/WINDOWS_PROCESS_CAPTURE_GUIDE.md) 做“按目标进程归因”的干净抓包
 
 ## Web GUI
 
@@ -1385,7 +1385,7 @@ cargo run --example pcap_summary -- /tmp/netzip_6100.pcap
     - 先按 `count * 0x1f4 + 0x3e8` 分配输出区
     - 再逐条调用 `0x1007ef80`
   - `0x1007ef80` 则基本坐实为“内部实时对象 -> 对外 `OEM_REPORT(pack=1)`”的映射器
-  - 这里和 [OemStock.h](/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `#pragma pack(push, 1)` / `OEM_REPORT // 实时数据，500 字节` 偏移已经能一一对上：
+  - 这里和 [OemStock.h](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `#pragma pack(push, 1)` / `OEM_REPORT // 实时数据，500 字节` 偏移已经能一一对上：
     - `+0x058..0x084` 对应 `time/foot/openDate/openTime/closeDate/open/high/low/close/volume/amount/inVol`
     - `+0x088..0x176` 对应 `pricesell / volsell / vsellCha / pricebuy / volbuy / vbuyCha`
     - `+0x178..0x1a6` 对应 `jingJia/avPrice/isBuy/nowv/nowa/change/weiBi/liangBi/last/limitUp/limitDown/isIndex/isDaPan/isStock/bsNum/tickNum`
@@ -1409,7 +1409,7 @@ cargo run --example pcap_summary -- /tmp/netzip_6100.pcap
 - `0x1007d810`
   - 现在更准确地说，是 `OEM_MARKETINFO + OEM_STKINFO[]` 的代码表初始化导出器
   - `0x10083a00(base) = base + 0xc8`，`0x100839c0(n) = 0xc8 + n * 0xfa`
-  - 这和 [OemStock.h](/home/codes/quoteNetzipRs/netzipapi-rust-demo/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `offsetof(OEM_MARKETINFO, stkInfo) = 0xc8`、`OEM_STKINFO = 250字节` 完全对上
+  - 这和 [OemStock.h](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `offsetof(OEM_MARKETINFO, stkInfo) = 0xc8`、`OEM_STKINFO = 250字节` 完全对上
 
 另外，`rustHq` 这份公开通达信实现对 `0x750010` 这条线也给了一个很强的交叉印证：
 - [packet.rs](/home/codes/crates/rustHq/src/packet.rs#L168) 的标准财务请求低 `16` 位就是 `0x0010`
