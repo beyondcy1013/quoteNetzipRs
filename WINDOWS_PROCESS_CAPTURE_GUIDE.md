@@ -72,7 +72,7 @@ Get-Process -Name NetzipDemo | Select-Object Id, ProcessName, Path
 
 仓库里已经放了脚本：
 
-[watch_process_tcp.ps1](/home/codes/netzipapi-rust-demo/tools/windows/watch_process_tcp.ps1)
+[watch_process_tcp.ps1](/home/codes/quoteNetzipRs/tools/windows/watch_process_tcp.ps1)
 
 在管理员 PowerShell 里运行：
 
@@ -253,7 +253,7 @@ tcp.port == 6100 || tcp.port == 14017
 
 对应文档：
 
-[TDX118_DUMP_GUIDE.md](/home/codes/netzipapi-rust-demo/TDX118_DUMP_GUIDE.md)
+[TDX118_DUMP_GUIDE.md](/home/codes/quoteNetzipRs/TDX118_DUMP_GUIDE.md)
 
 但这个 dump 只在“确认这条链确实属于目标进程”以后再做。
 
@@ -275,4 +275,3 @@ tcp.port == 6100 || tcp.port == 14017
 
 - 之前的 `7709` 是否应整体降级
 - 真正该继续追的主端口到底是哪条
-
