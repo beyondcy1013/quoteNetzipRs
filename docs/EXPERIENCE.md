@@ -1,5 +1,160 @@
 # NetzipRs Experience
 
+## 2026-08-06 - Route Rust panel authentication through production account 1522
+
+### Phenomenon And Root Cause
+
+The legacy panel connection path still normalized its account from persisted sample state,
+which could silently submit the historical `168/168` credentials. The Rust 7100 login request
+builder already existed, but credential selection was not centralized and the panel response
+could serialize the password back to API clients.
+
+### Change
+
+- Normalize the Rust panel account to `1522`; `NETZIP_TDX_ACCOUNT` may override it for controlled
+  staging, while old persisted accounts are ignored.
+- Read the password from `NETZIP_TDX_PASSWORD` first, with the existing permission-controlled
+  runtime state retained only as a compatibility fallback.
+- Mark the panel password field `skip_serializing` so API responses do not return the secret.
+- Keep the existing 7100 protocol probe as the authentication attempt and preserve an explicit
+  `protocol_login_supported=false` result when the reply/decryption chain is incomplete.
+
+### Verification
+
+Offline unit tests cover the default account and password-source selection. Full compilation and
+runtime authentication still require the production password to be injected by the service
+environment; no password is stored in source, logs, or this document.
+
+## 2026-07-31 - Drive native 0547 renewal from vendor response tokens
+
+### Root Cause And Accepted Design
+
+Wine-off packet capture proved that the original native sessions sent only the initial `0x0547`
+request; continuing traffic came from the low-frequency audit poller. Wine uses `0x420c/0x2a02`
+renewals carrying the per-security token returned at decoded record offset `+0x21`. Native now
+records only confirmed response tokens, preserves the observed 800ms request and 2s response
+eligibility gates, and schedules renewals across the 53 retained 100-symbol sessions. A shared
+sliding one-second gate permits at most 160 renewal frames, bounding the response-driven traffic
+without discarding unused capacity.
+
+### Trading-Hours Evidence
+
+- With Wine paused, a 247.5s session received 320,155 records with 6,079 renewals, zero reader
+  failures/recoveries, and seven successful audits. Thirty fixed liquid symbols advanced
+  continuously without the previous 20-30s global silence.
+- After Wine was restored, a 12s capture measured Wine at about 139.5 requests/s. The earlier
+  unconstrained native response-driven result of about 147 requests/s was therefore vendor-scale
+  behavior rather than an intrinsic request storm.
+- The accepted sliding-window build measured 140.5 native requests/s over 12s. Complete one-second
+  buckets peaked at 159, below the 160 hard limit. Two complete resident sessions received about
+  554k and 556k records with 35,096 and 35,559 renewals; both had zero reader, recovery, and audit
+  failures.
+- Final reset request `143124-18c742bcea915315` left exactly 53 native and 20 Wine connections.
+  The native process used about 6.6% CPU, all native receive queues were empty, all three services
+  were active, and the post-reset warning journal was empty. quoteGateway's ingest-failure counter
+  is process-cumulative across the controlled restart experiments and must not be interpreted as
+  a failure count for the final session; its current error fields were empty.
+- The first final post-reset session completed in 252.5s with 545,680 received records, 32,164
+  renewals, zero reader failures/recoveries, and seven successful audits. Eight cached audit-poll
+  sockets accumulated unread unsolicited bytes between audits while all 53 push sockets remained
+  drained; this identified a separate audit-connection lifecycle issue, not push-reader
+  backpressure.
+- The audit lifecycle was then fixed by making only push-internal audit polling sessions
+  ephemeral; the public polling endpoint still returns healthy sessions to its cache. Deployment
+  and reset requests `144220-18c74c92ca84d0f5` and `144313-18c74c92ca84d0f6` showed the same
+  sequence across two audits: 53 resident push connections rose temporarily to 61, then returned
+  through 60/55 to exactly 53 with a zero receive queue. No idle audit connection remained cached.
+
+### Rejected Optimizations
+
+- A globally smoothed 7ms slot reduced native traffic to about 56 requests/s because 53 blocking
+  readers frequently missed slots; fixed-symbol freshness became worse. A sliding-window ceiling
+  retains the hard bound without wasting capacity.
+- A Wine-shaped 20-session layout, with two or three initial 100-symbol batches per connection,
+  was tested with both 250ms and 100ms reader observation slices. The shorter slice restored about
+  150 requests/s, but effective token throughput remained near 2,200 symbols/s and thirty-symbol
+  freshness regressed to roughly 4-8s behind Wine, with a 15s outlier.
+- Waiting for either 32 due tokens or 100ms increased payload size but reduced request frequency;
+  effective throughput and user-visible freshness did not improve. The 20-session and coalescing
+  changes were fully removed before the final regression and deployment.
+
+## 2026-07-31 - Parallelize the full-market 7709 polling cycle
+
+### Phenomenon And Root Cause
+
+The resident publisher was called full push, but it polled 5,534 symbols as 53 primary and 5
+fallback request batches in one serial loop. On 2026-07-30, 354 successful rounds had a 38.0s
+median interval and 63.3s p90; the afternoon median was 49.3s. The service process was not CPU
+bound. Latency accumulated while waiting for sequential 7709 request/reply batches, with
+incomplete frames adding fresh-session retries.
+
+### Change
+
+- Distribute batches round-robin across four persistent 7709 sessions by default.
+- Accept `worker_count` per request and `NETZIP_FULL_PUSH_WORKERS=1..16` from the resident runner.
+- Keep each worker's batches serial and retain the existing three-attempt session-reopen boundary.
+- Isolate cached sessions by stage, upstream, and worker index.
+- Preserve source-time deduplication and primary-before-fallback routing.
+- Report total/stage elapsed time, actual worker counts, and slowest batch durations.
+
+### Verification
+
+- TDD RED request `075927-18c71d0caddaf4e2` failed only because worker validation and batch
+  sharding did not exist.
+- GREEN request `080341-18c71d0caddaf4e4` passed the bounded-worker test after implementation.
+- Full workspace request `080434-18c71d0caddaf4e5` passed 125 asserted tests with zero failures.
+- Deployment request `080534-18c71d0caddaf4e7` installed release SHA-256
+  `b196f7a308fe0031aa3dcdac1da879a507ab072dcf9fef62a0c16fbe36151565`; both resident services
+  were active with zero restarts and the installed runner selected four workers by default.
+- Runtime acceptance still requires an open-market comparison of `elapsed_ms` and source quote
+  lag against the 2026-07-30 serial baseline.
+
+## 2026-07-30 - Reproduce the OEM public cumulative-amount boundary
+
+### Phenomenon And Root Cause
+
+Raw Rust `0x0547` amounts differed from Wine public `OEM_REPORT.amount` in both directions, so a
+fixed correction could not be valid. Production `网际风.exe` stores the raw amount at `0x483a9c`,
+then `0x40aeb0 / 0x40acc0` apply a security-category-specific lossy `f32` encode/decode cycle
+before `0x4a7890` exposes the public object. `0x40a130` owns the category grouping. The difference
+therefore belongs to the public-object conversion boundary, not the wire parser or quoteGateway.
+
+### Change
+
+- Preserve `Tdx0547Record.amount` and `amount_raw` as raw diagnostics.
+- At the CompactQuote boundary, reproduce the verified index and price-relative `f32` operations
+  step by step. Apply them only to SH/SZ category ranges independently confirmed from production
+  `实时.dat`; unverified categories retain the decoded value.
+- Mark gateway rows as `netzip-rust-7709-0547.v3`. quoteGateway was deployed first and permits
+  only an exact-datetime v2-to-v3 cache migration; ordinary stale/conflict behavior is unchanged.
+
+### Evidence And Verification
+
+- Wine literals for `SH510300`, `SH511010`, `SZ159919`, `SZ399001`, and `SH688001` all match
+  bit-for-bit. A convertible-bond sample confirms the direct mode.
+- Across the quoteGateway worklist, all `5181` Wine/Rust rows with identical datetime and volume
+  matched the reconstructed formula; rows with different input snapshots were excluded.
+- webClx requests `025042-18c6d0a033f1868a` and `025330-18c6d0a033f1868c` record the CompactQuote
+  RED/GREEN cycle. Request `025606-18c6d0a033f1868e` passed the cross-category literals.
+- quoteGateway request `025704-18c6d0a033f1868f` recorded migration RED; request
+  `025823-18c6d0a033f18690` passed GREEN. Its 211-test regression passed in
+  `030241-18c6d0a033f18695`, and deployment `030332-18c6d0a033f18696` completed before the
+  NetzipRs producer protocol changed.
+- NetzipRs full-workspace request `031200-18c6d0a033f1869c` passed formatting and 123 tests with
+  zero failures. Deployment request `031306-18c6d0a033f1869d` then installed
+  `/home/bin/netzip/netzip_service` SHA-256
+  `0c4ac2f9dd4a6df37f99604436146251db03808213538619927f0476d6e1a79b`, after the
+  quoteGateway v3 consumer was already online.
+- A post-deploy worklist publication used quoteGateway's authoritative
+  `required_quote_trade_date=2026-07-29`, published `SZ000001` and `SZ000002`, and was accepted as
+  two updates with zero source stale rejections, conflicts, or ingest failures. The downstream
+  cache retained `source_protocol=netzip-rust-7709-0547.v3` and public amounts `1705880320` and
+  `782175744`, exactly matching the NetzipRs CompactQuote response.
+- Repeating the same worklist publication in the resident process returned
+  `published_count=0` and `unchanged_count=2`; no second gateway batch was sent. Both
+  `netzip-rs.service` and `netzip-rs-full-push.service` remained active with `NRestarts=0`, the
+  timer unit was absent, and the post-deploy warning journal was empty.
+
 ## 2026-07-28 - Separate raw 0547 time from OEM public quote time
 
 ### Phenomenon
@@ -76,3 +231,64 @@ Verification evidence is recorded in the webClx build and install logs for the d
 introduced this change. Runtime acceptance requires the publisher service to remain active during
 an idle window, the timer unit to be absent, and quoteGateway counters to stay unchanged when all
 upstream quote times are unchanged.
+
+## 2026-07-31 - Publish Beijing quotes through the resident native source
+
+### Design
+
+The vendor native `0x0547` subscription path covers the 5,204 Shanghai and Shenzhen worklist
+symbols but does not provide equivalent Beijing coverage. Keep that proven 53-session path
+unchanged and route only `BJ*` worklist symbols through the existing `7709` snapshot protocol.
+The Beijing side uses four workers, batches at most 100 symbols per request, and repeats every
+three seconds. It owns a request-local session cache, so the four connections are reused during a
+resident push request and closed when that request ends. Failures are counted separately and do
+not stop Shanghai or Shenzhen readers.
+
+Both paths use the same source-time deduplication, authoritative worklist names, quoteGateway
+batch schema, publication gate, and `netzipRust7709` source identity. The interval is configurable
+with `NETZIP_NATIVE_BJ_POLL_INTERVAL_SECS` in the bounded range 1 through 30 seconds; activation
+sets the conservative default of three seconds without replacing unrelated defaults.
+
+### Verification
+
+- Runner and activation contract tests passed in webClx request
+  `175705-18c75322044ea3b6`; full workspace regression passed in
+  `175720-18c75322044ea3b7`.
+- Deployment `175744-18c75322044ea3ba` installed the implementation, and controlled reset
+  `175850-18c75322044ea3bb` restored exactly one resident runner.
+- Post-close acceptance `175931-18c75322044ea3bd` ran for 15 seconds against the full 5,535-symbol
+  worklist. The unchanged Shanghai/Shenzhen topology reported 53 shards, 36,428 received records,
+  zero reader failures, and zero recoveries.
+- All 331 Beijing symbols completed three polling rounds with zero failures. The first round
+  published 331 records; the following two rounds classified all 662 records as unchanged.
+- quoteGateway returned `920000`, `920001`, `920008`, and `920009` with
+  `feed_source=netzipRust7709`, `available_sources` containing `netzipRust7709`, and the existing
+  `source_protocol=netzip-rust-7709-0547.v3`.
+- After the acceptance request returned, `netzip_service` retained only its HTTP listener and one
+  loopback gateway connection. No upstream `7709` connection remained, confirming that the local
+  Beijing session cache was released at the request boundary.
+
+## 2026-08-06 - Isolate and observe gateway ACK/send failures
+
+### Phenomenon And Root Cause
+
+The Rust publisher discarded TCP send/ACK errors before falling back to HTTP. A read timeout on the
+fallback response then propagated through the main push loop and ended the active session, while the
+Beijing poller could continue independently. The loops were separate, but both used one global TCP
+client slot and lock, so transport state was not isolated. Gateway ingest failure counters could remain
+zero even when the sender could not receive an ACK.
+
+### Change
+
+- Allocate gateway TCP clients by explicit publish lane (`main`, `bj`, `manual`).
+- Record per-lane attempts, TCP successes/failures, HTTP fallbacks, final failures, consecutive
+  failures, last transport, and last error; expose a snapshot in full-push responses.
+- Preserve the exact error in logs and metrics, including the reason for HTTP fallback.
+- Treat a failed main-market batch as a counted partial publish and continue consuming later batches;
+  successful batches alone advance the last-published watermark.
+
+### Acceptance
+
+- Transport contract test proves main and BJ lanes use distinct client slots.
+- TCP failure is visible with its lane and error, followed by an explicit HTTP fallback event.
+- A failed batch does not advance the published watermark or terminate the rest of the active loop.

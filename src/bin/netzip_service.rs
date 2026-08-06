@@ -6,8 +6,8 @@ use axum::{
     Json, Router,
     routing::{get, post},
 };
+use netzipapi_rust_demo::tdx_0547_scheduler::{QuoteRenewalScheduler, RenewalRateGate};
 use netzipapi_rust_demo::tdx_push_coalescer::{TdxPushCoalescer, TdxPushEvent};
-use netzipapi_rust_demo::tdx_0547_scheduler::{QuoteRenewalScheduler, RenewalBatchGate};
 use netzipapi_rust_demo::{
     FIN_GETTER_UNRESOLVED_IDS, ProtoProbeConfig, ProtoProbeEncoding as ProbeEncoding,
     QuoteReplayConfig, SH_FIN_URL, SZ_FIN_URL, Tdx7709Config, Tdx7709QuoteRequestItem,
@@ -32,12 +32,16 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 static FULL_PUSH_SESSION_CACHE: OnceLock<Mutex<BTreeMap<String, Tdx7709Session>>> = OnceLock::new();
 static FULL_PUSH_LAST_PUBLISHED_AT: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
-static NETZIP_RUST_TCP_CLIENT: OnceLock<Mutex<Option<NetzipRustTcpClient>>> = OnceLock::new();
+static NETZIP_RUST_TCP_CLIENTS: OnceLock<
+    Mutex<BTreeMap<String, Arc<Mutex<Option<NetzipRustTcpClient>>>>>,
+> = OnceLock::new();
+static NETZIP_RUST_PUBLISH_METRICS: OnceLock<Mutex<BTreeMap<String, GatewayPublishMetrics>>> =
+    OnceLock::new();
 static NATIVE_PUSH_CODE_TABLE_LOOKUP: OnceLock<BTreeMap<String, Quote0547CodeTableInfo>> =
     OnceLock::new();
 
@@ -59,6 +63,36 @@ struct NetzipRustTcpSendResult {
     ack: NetzipRustTcpAck,
     wire_bytes: usize,
     json_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GatewayPublishLane {
+    Main,
+    Bj,
+    Manual,
+}
+
+impl GatewayPublishLane {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Bj => "bj",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct GatewayPublishMetrics {
+    attempts: u64,
+    tcp_successes: u64,
+    tcp_failures: u64,
+    http_fallbacks: u64,
+    successes: u64,
+    failures: u64,
+    consecutive_failures: u64,
+    last_transport: Option<String>,
+    last_error: Option<String>,
 }
 
 struct NetzipRustTcpClient {
@@ -239,6 +273,40 @@ impl NetzipRustTcpClient {
     }
 }
 
+fn netzip_rust_tcp_client_slot(
+    lane: GatewayPublishLane,
+    tcp_addr: &str,
+) -> Arc<Mutex<Option<NetzipRustTcpClient>>> {
+    let clients = NETZIP_RUST_TCP_CLIENTS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let key = netzip_rust_tcp_client_key(lane, tcp_addr);
+    let mut clients = clients.lock().unwrap_or_else(|err| err.into_inner());
+    clients
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(None)))
+        .clone()
+}
+
+fn netzip_rust_tcp_client_key(lane: GatewayPublishLane, tcp_addr: &str) -> String {
+    format!("{}:{tcp_addr}", lane.label())
+}
+
+fn record_gateway_publish_metric(
+    lane: GatewayPublishLane,
+    update: impl FnOnce(&mut GatewayPublishMetrics),
+) {
+    let metrics = NETZIP_RUST_PUBLISH_METRICS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut metrics = metrics.lock().unwrap_or_else(|err| err.into_inner());
+    update(metrics.entry(lane.label().to_string()).or_default());
+}
+
+fn gateway_publish_metrics_snapshot() -> BTreeMap<String, GatewayPublishMetrics> {
+    NETZIP_RUST_PUBLISH_METRICS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
+}
+
 #[derive(Clone)]
 struct AppState {
     service_name: &'static str,
@@ -282,6 +350,14 @@ mod netzip_rust_tcp_transport_contract_tests {
         assert_eq!(decoded.sequence, 19);
         assert_eq!(decoded.applied, 1);
         assert_eq!(decoded.cached_quotes, 5522);
+    }
+
+    #[test]
+    fn main_and_bj_lanes_use_distinct_transport_slots() {
+        assert_ne!(
+            super::netzip_rust_tcp_client_key(super::GatewayPublishLane::Main, "127.0.0.1:16889"),
+            super::netzip_rust_tcp_client_key(super::GatewayPublishLane::Bj, "127.0.0.1:16889")
+        );
     }
 }
 
@@ -594,12 +670,14 @@ struct HqwPublishWorklistResponse {
     no_current_quote_count: usize,
     no_current_quote_codes: Vec<String>,
     last_gateway_response: Option<serde_json::Value>,
+    gateway_publish_metrics: BTreeMap<String, GatewayPublishMetrics>,
 }
 
 #[derive(Debug, Deserialize)]
 struct HqwPushWorklistRequest {
     duration_secs: Option<u64>,
     audit_interval_secs: Option<u64>,
+    bj_poll_interval_secs: Option<u64>,
     publish: Option<bool>,
 }
 
@@ -618,11 +696,18 @@ struct HqwPushWorklistResponse {
     published_records: usize,
     unchanged_records: usize,
     publish_batches: usize,
+    publish_failures: usize,
     reader_failures: usize,
     reader_recoveries: usize,
     renewal_requests: usize,
     audit_runs: usize,
     audit_failures: usize,
+    bj_poll_symbols: usize,
+    bj_poll_runs: usize,
+    bj_poll_failures: usize,
+    bj_published_records: usize,
+    bj_unchanged_records: usize,
+    gateway_publish_metrics: BTreeMap<String, GatewayPublishMetrics>,
     elapsed_ms: u128,
 }
 
@@ -632,6 +717,22 @@ struct GatewayWorklist {
     fallback_quote_time: String,
     symbols: Vec<String>,
     names: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BjPollPlan {
+    symbols: Vec<String>,
+    batch_count: usize,
+    worker_count: usize,
+    interval: Duration,
+}
+
+#[derive(Debug, Default)]
+struct BjPollSummary {
+    runs: usize,
+    failures: usize,
+    published_records: usize,
+    unchanged_records: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3084,6 +3185,7 @@ async fn hqw_publish(
             current_token.as_deref(),
             &current_payload,
             &mut protocol,
+            GatewayPublishLane::Manual,
         )?;
         Ok::<_, ApiError>(HqwPublishResponse {
             success: true,
@@ -3132,6 +3234,7 @@ async fn hqw_publish_worklist(
             batch_size,
             limit,
             worker_count,
+            true,
         )
     })
     .await
@@ -3154,6 +3257,12 @@ async fn hqw_push_worklist(
             "audit_interval_secs must be between 10 and 300",
         ));
     }
+    let bj_poll_interval_secs = request.bj_poll_interval_secs.unwrap_or(3);
+    if !(1..=30).contains(&bj_poll_interval_secs) {
+        return Err(ApiError::bad_request(
+            "bj_poll_interval_secs must be between 1 and 30",
+        ));
+    }
     let publish = request.publish.unwrap_or(false);
     if publish && std::env::var("NETZIP_NATIVE_PUSH_PUBLISH_ENABLE").as_deref() != Ok("1") {
         return Err(ApiError::bad_request(
@@ -3169,6 +3278,7 @@ async fn hqw_push_worklist(
             current_token,
             Duration::from_secs(duration_secs),
             Duration::from_secs(audit_interval_secs),
+            Duration::from_secs(bj_poll_interval_secs),
             publish,
         )
     })
@@ -5954,6 +6064,17 @@ fn cache_full_push_session<S>(cache: &Mutex<BTreeMap<String, S>>, key: &str, ses
         .insert(key.to_string(), session);
 }
 
+fn return_full_push_session<S>(
+    cache: &Mutex<BTreeMap<String, S>>,
+    key: &str,
+    session: Option<S>,
+    reuse_session: bool,
+) {
+    if reuse_session && let Some(session) = session {
+        cache_full_push_session(cache, key, session);
+    }
+}
+
 fn full_push_session_cache() -> &'static Mutex<BTreeMap<String, Tdx7709Session>> {
     FULL_PUSH_SESSION_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
@@ -6023,6 +6144,82 @@ fn split_full_push_upstreams(symbols: &[String]) -> (Vec<String>, Vec<String>) {
         .iter()
         .cloned()
         .partition(|symbol| !symbol.starts_with("BJ"))
+}
+
+fn build_bj_poll_plan(symbols: &[String], interval: Duration) -> Result<BjPollPlan, ApiError> {
+    if interval < Duration::from_secs(1) || interval > Duration::from_secs(30) {
+        return Err(ApiError::bad_request(
+            "bj_poll_interval_secs must be between 1 and 30",
+        ));
+    }
+    let batch_count = symbols.len().div_ceil(100);
+    Ok(BjPollPlan {
+        symbols: symbols.to_vec(),
+        batch_count,
+        worker_count: batch_count.min(4),
+        interval,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_bj_poll_loop(
+    plan: &BjPollPlan,
+    deadline: Instant,
+    trade_date: &str,
+    fallback_quote_time: &str,
+    worklist_names: &BTreeMap<String, String>,
+    gateway_addr: &str,
+    current_token: Option<&str>,
+) -> BjPollSummary {
+    let fallback_host =
+        std::env::var("NETZIP_TDX7709_FALLBACK_HOST").unwrap_or_else(|_| "139.9.43.31".to_string());
+    let config = Tdx7709Config {
+        host: fallback_host,
+        ..Tdx7709Config::default()
+    };
+    let session_cache = Mutex::new(BTreeMap::new());
+    let mut protocol = GatewayPublishProtocol::Auto;
+    let mut summary = BjPollSummary::default();
+    while Instant::now() < deadline {
+        match publish_full_push_stage(
+            "bj-resident",
+            &config,
+            &plan.symbols,
+            100,
+            trade_date,
+            fallback_quote_time,
+            worklist_names,
+            gateway_addr,
+            current_token,
+            plan.worker_count,
+            &session_cache,
+            true,
+            &mut protocol,
+            GatewayPublishLane::Bj,
+        ) {
+            Ok(result) => {
+                summary.runs = summary.runs.saturating_add(1);
+                summary.published_records = summary
+                    .published_records
+                    .saturating_add(result.published_count);
+                summary.unchanged_records = summary
+                    .unchanged_records
+                    .saturating_add(result.unchanged_count);
+            }
+            Err(error) => {
+                summary.failures = summary.failures.saturating_add(1);
+                eprintln!("native BJ polling failed: {error:?}");
+            }
+        }
+        let next_poll_at = Instant::now() + plan.interval;
+        let sleep_for = deadline
+            .saturating_duration_since(Instant::now())
+            .min(next_poll_at.saturating_duration_since(Instant::now()));
+        if !sleep_for.is_zero() {
+            std::thread::sleep(sleep_for);
+        }
+    }
+    summary
 }
 
 fn partition_hqw_quotes(
@@ -6098,7 +6295,8 @@ fn flush_native_push_quotes(
     current_token: Option<&str>,
     publish: bool,
     protocol: &mut GatewayPublishProtocol,
-) -> Result<(usize, usize, usize), ApiError> {
+    lane: GatewayPublishLane,
+) -> Result<(usize, usize, usize, usize), ApiError> {
     let batches = if force {
         coalescer.drain()
     } else {
@@ -6107,6 +6305,7 @@ fn flush_native_push_quotes(
     let mut published = 0usize;
     let mut unchanged = 0usize;
     let mut publish_batches = 0usize;
+    let mut publish_failures = 0usize;
     for batch in batches {
         let quotes = batch
             .into_iter()
@@ -6119,12 +6318,27 @@ fn flush_native_push_quotes(
             continue;
         }
         let payload = build_netzip_rust_7709_quote_batch(&quotes, trade_date)?;
-        post_quote_gateway_batch_auto(gateway_addr, current_token, &payload, protocol)?;
-        record_published_full_push_quotes(full_push_last_published_at(), trade_date, &quotes);
-        published = published.saturating_add(quotes.len());
-        publish_batches = publish_batches.saturating_add(1);
+        match post_quote_gateway_batch_auto(gateway_addr, current_token, &payload, protocol, lane) {
+            Ok(_) => {
+                record_published_full_push_quotes(
+                    full_push_last_published_at(),
+                    trade_date,
+                    &quotes,
+                );
+                published = published.saturating_add(quotes.len());
+                publish_batches = publish_batches.saturating_add(1);
+            }
+            Err(error) => {
+                publish_failures = publish_failures.saturating_add(1);
+                eprintln!(
+                    "full push publish lane={} batch_quotes={} failed after bounded transport fallback: {error:?}",
+                    lane.label(),
+                    quotes.len()
+                );
+            }
+        }
     }
-    Ok((published, unchanged, publish_batches))
+    Ok((published, unchanged, publish_batches, publish_failures))
 }
 
 fn execute_hqw_push_worklist(
@@ -6132,12 +6346,14 @@ fn execute_hqw_push_worklist(
     current_token: Option<String>,
     duration: Duration,
     audit_interval: Duration,
+    bj_poll_interval: Duration,
     publish: bool,
 ) -> Result<HqwPushWorklistResponse, ApiError> {
     let overall_started_at = Instant::now();
     let worklist_payload = get_gateway_worklist(&gateway_addr, 6_000)?;
     let worklist = parse_gateway_worklist(&worklist_payload)?;
-    let (primary_symbols, _) = split_full_push_upstreams(&worklist.symbols);
+    let (primary_symbols, bj_symbols) = split_full_push_upstreams(&worklist.symbols);
+    let bj_poll_plan = build_bj_poll_plan(&bj_symbols, bj_poll_interval)?;
     let batches = split_full_push_batches(&primary_symbols, 100)?;
     let code_table_lookup = if let Some(lookup) = NATIVE_PUSH_CODE_TABLE_LOOKUP.get() {
         lookup.clone()
@@ -6155,10 +6371,33 @@ fn execute_hqw_push_worklist(
     let deadline = started_at + duration;
     let (sender, receiver) = mpsc::channel::<NativePushReaderMessage>();
     let shard_count = batches.len();
+    let renewal_rate_gate = Arc::new(Mutex::new(RenewalRateGate::per_second(160)));
 
     std::thread::scope(|scope| -> Result<HqwPushWorklistResponse, ApiError> {
+        let bj_poll_handle = if publish && !bj_poll_plan.symbols.is_empty() {
+            let plan = bj_poll_plan.clone();
+            let trade_date = worklist.trade_date.clone();
+            let fallback_quote_time = worklist.fallback_quote_time.clone();
+            let worklist_names = worklist.names.clone();
+            let bj_gateway_addr = gateway_addr.clone();
+            let bj_current_token = current_token.clone();
+            Some(scope.spawn(move || {
+                execute_bj_poll_loop(
+                    &plan,
+                    deadline,
+                    &trade_date,
+                    &fallback_quote_time,
+                    &worklist_names,
+                    &bj_gateway_addr,
+                    bj_current_token.as_deref(),
+                )
+            }))
+        } else {
+            None
+        };
         for (shard, symbols) in batches.into_iter().enumerate() {
             let sender = sender.clone();
+            let renewal_rate_gate = Arc::clone(&renewal_rate_gate);
             scope.spawn(move || {
                 let request_items = symbols
                     .iter()
@@ -6176,7 +6415,6 @@ fn execute_hqw_push_worklist(
                             Tdx7709Session::open_quote_only(&Tdx7709Config::default())?;
                         let initial = session.request_live_quotes(&request_items)?;
                         let mut renewal_scheduler = QuoteRenewalScheduler::default();
-                        let mut renewal_gate = RenewalBatchGate::new(0);
                         let _ = sender.send(NativePushReaderMessage::Healthy { shard });
                         for record in initial
                             .quote_bodies
@@ -6223,9 +6461,15 @@ fn execute_hqw_push_worklist(
                                     return Ok(());
                                 }
                             }
-                            let now_ms = session_started_at.elapsed().as_millis() as u64;
-                            if renewal_gate.take_due(now_ms) {
-                                let due = renewal_scheduler.take_due(now_ms, 100);
+                            let session_now_ms = session_started_at.elapsed().as_millis() as u64;
+                            let global_now_ms = started_at.elapsed().as_millis() as u64;
+                            if renewal_scheduler.has_due(session_now_ms)
+                                && renewal_rate_gate
+                                    .lock()
+                                    .expect("renewal rate gate poisoned")
+                                    .try_take(global_now_ms)
+                            {
+                                let due = renewal_scheduler.take_due(session_now_ms, 100);
                                 let renewals = due
                                     .into_iter()
                                     .map(|item| Tdx7709QuoteRequestItem {
@@ -6267,6 +6511,7 @@ fn execute_hqw_push_worklist(
         let mut published_records = 0usize;
         let mut unchanged_records = 0usize;
         let mut publish_batches = 0usize;
+        let mut publish_failures = 0usize;
         let mut reader_failures = 0usize;
         let mut reader_recoveries = 0usize;
         let mut renewal_requests = 0usize;
@@ -6319,7 +6564,7 @@ fn execute_hqw_push_worklist(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
 
-            let (published, unchanged, batches) = flush_native_push_quotes(
+            let (published, unchanged, batches, failures) = flush_native_push_quotes(
                 &mut coalescer,
                 started_at.elapsed().as_millis() as u64,
                 false,
@@ -6328,10 +6573,12 @@ fn execute_hqw_push_worklist(
                 current_token.as_deref(),
                 publish,
                 &mut protocol,
+                GatewayPublishLane::Main,
             )?;
             published_records = published_records.saturating_add(published);
             unchanged_records = unchanged_records.saturating_add(unchanged);
             publish_batches = publish_batches.saturating_add(batches);
+            publish_failures = publish_failures.saturating_add(failures);
 
             if audit_handle
                 .as_ref()
@@ -6353,13 +6600,14 @@ fn execute_hqw_push_worklist(
                         100,
                         6_000,
                         8,
+                        false,
                     )
                 }));
                 next_audit_at = Instant::now() + audit_interval;
             }
         }
 
-        let (published, unchanged, batches) = flush_native_push_quotes(
+        let (published, unchanged, batches, failures) = flush_native_push_quotes(
             &mut coalescer,
             started_at.elapsed().as_millis() as u64,
             true,
@@ -6368,16 +6616,25 @@ fn execute_hqw_push_worklist(
             current_token.as_deref(),
             publish,
             &mut protocol,
+            GatewayPublishLane::Main,
         )?;
         published_records = published_records.saturating_add(published);
         unchanged_records = unchanged_records.saturating_add(unchanged);
         publish_batches = publish_batches.saturating_add(batches);
+        publish_failures = publish_failures.saturating_add(failures);
         if let Some(handle) = audit_handle {
             audit_runs = audit_runs.saturating_add(1);
             if !matches!(handle.join(), Ok(Ok(_))) {
                 audit_failures = audit_failures.saturating_add(1);
             }
         }
+        let bj_poll_summary = match bj_poll_handle {
+            Some(handle) => handle.join().unwrap_or_else(|_| BjPollSummary {
+                failures: 1,
+                ..BjPollSummary::default()
+            }),
+            None => BjPollSummary::default(),
+        };
 
         Ok(HqwPushWorklistResponse {
             success: true,
@@ -6393,11 +6650,18 @@ fn execute_hqw_push_worklist(
             published_records,
             unchanged_records,
             publish_batches,
+            publish_failures,
             reader_failures,
             reader_recoveries,
             renewal_requests,
             audit_runs,
             audit_failures,
+            bj_poll_symbols: bj_poll_plan.symbols.len(),
+            bj_poll_runs: bj_poll_summary.runs,
+            bj_poll_failures: bj_poll_summary.failures,
+            bj_published_records: bj_poll_summary.published_records,
+            bj_unchanged_records: bj_poll_summary.unchanged_records,
+            gateway_publish_metrics: gateway_publish_metrics_snapshot(),
             elapsed_ms: overall_started_at.elapsed().as_millis(),
         })
     })
@@ -6409,11 +6673,13 @@ fn execute_hqw_publish_worklist(
     batch_size: usize,
     limit: usize,
     worker_count: usize,
+    reuse_sessions: bool,
 ) -> Result<HqwPublishWorklistResponse, ApiError> {
     let started_at = Instant::now();
     let worklist_payload = get_gateway_worklist(&gateway_addr, limit)?;
     let worklist = parse_gateway_worklist(&worklist_payload)?;
     let mut gateway_protocol = GatewayPublishProtocol::Auto;
+    let session_cache = full_push_session_cache();
     let (primary_symbols, mut fallback_symbols) = split_full_push_upstreams(&worklist.symbols);
     let primary_config = Tdx7709Config::default();
     let primary = publish_full_push_stage(
@@ -6427,7 +6693,10 @@ fn execute_hqw_publish_worklist(
         &gateway_addr,
         current_token,
         worker_count,
+        session_cache,
+        reuse_sessions,
         &mut gateway_protocol,
+        GatewayPublishLane::Manual,
     )?;
     fallback_symbols.splice(0..0, primary.missing_codes);
     let mut seen = BTreeSet::new();
@@ -6450,7 +6719,10 @@ fn execute_hqw_publish_worklist(
         &gateway_addr,
         current_token,
         worker_count,
+        session_cache,
+        reuse_sessions,
         &mut gateway_protocol,
+        GatewayPublishLane::Manual,
     )?;
     let last_gateway_response = fallback
         .last_gateway_response
@@ -6481,6 +6753,7 @@ fn execute_hqw_publish_worklist(
         no_current_quote_count: fallback.missing_codes.len(),
         no_current_quote_codes: fallback.missing_codes,
         last_gateway_response,
+        gateway_publish_metrics: gateway_publish_metrics_snapshot(),
     })
 }
 
@@ -6496,7 +6769,10 @@ fn publish_full_push_stage(
     gateway_addr: &str,
     current_token: Option<&str>,
     requested_worker_count: usize,
+    session_cache: &Mutex<BTreeMap<String, Tdx7709Session>>,
+    reuse_sessions: bool,
     gateway_protocol: &mut GatewayPublishProtocol,
+    lane: GatewayPublishLane,
 ) -> Result<FullPushStageResult, ApiError> {
     let started_at = Instant::now();
     let batches = split_full_push_batches(symbols, batch_size)?;
@@ -6533,6 +6809,9 @@ fn publish_full_push_stage(
                         worklist_names,
                         gateway_addr,
                         current_token,
+                        session_cache,
+                        reuse_sessions,
+                        lane,
                     )
                 })
             })
@@ -6591,13 +6870,15 @@ fn publish_full_push_worker(
     worklist_names: &BTreeMap<String, String>,
     gateway_addr: &str,
     current_token: Option<&str>,
+    cache: &Mutex<BTreeMap<String, Tdx7709Session>>,
+    reuse_session: bool,
+    lane: GatewayPublishLane,
 ) -> Result<(FullPushStageResult, GatewayPublishProtocol), ApiError> {
     let started_at = Instant::now();
     let session_key = format!(
         "{stage}:{}:{}:worker-{worker_index}",
         config.host, config.port
     );
-    let cache = full_push_session_cache();
     let mut session = take_full_push_session(cache, &session_key);
     if session.is_none() {
         session = Some(Tdx7709Session::open(config).map_err(|err| {
@@ -6678,6 +6959,7 @@ fn publish_full_push_worker(
                 current_token,
                 &current_payload,
                 &mut protocol,
+                lane,
             )?);
             record_published_full_push_quotes(
                 full_push_last_published_at(),
@@ -6695,9 +6977,7 @@ fn publish_full_push_worker(
         Ok(result)
     })();
 
-    if let Some(session) = session {
-        cache_full_push_session(cache, &session_key, session);
-    }
+    return_full_push_session(cache, &session_key, session, reuse_session);
     worker_result.map(|result| (result, protocol))
 }
 
@@ -6834,6 +7114,7 @@ fn post_quote_gateway_batch_auto(
     current_token: Option<&str>,
     current_payload: &serde_json::Value,
     protocol: &mut GatewayPublishProtocol,
+    lane: GatewayPublishLane,
 ) -> Result<serde_json::Value, ApiError> {
     let transport =
         std::env::var("NETZIP_QUOTE_GATEWAY_TRANSPORT").unwrap_or_else(|_| "tcp".to_string());
@@ -6846,6 +7127,7 @@ fn post_quote_gateway_batch_auto(
         protocol,
         !transport.eq_ignore_ascii_case("http"),
         &tcp_addr,
+        lane,
     )
 }
 
@@ -6856,16 +7138,41 @@ fn post_quote_gateway_batch_with_tcp(
     protocol: &mut GatewayPublishProtocol,
     prefer_tcp: bool,
     tcp_addr: &str,
+    lane: GatewayPublishLane,
 ) -> Result<serde_json::Value, ApiError> {
+    record_gateway_publish_metric(lane, |metrics| metrics.attempts += 1);
     if prefer_tcp {
-        let client_cache = NETZIP_RUST_TCP_CLIENT.get_or_init(|| Mutex::new(None));
-        let mut cached = client_cache.lock().unwrap_or_else(|err| err.into_inner());
-        if cached.as_ref().is_none_or(|client| client.addr != tcp_addr) {
-            *cached = NetzipRustTcpClient::connect(tcp_addr).ok();
-        }
-        if let Some(client) = cached.as_mut() {
-            match client.send(current_payload) {
+        let client_slot = netzip_rust_tcp_client_slot(lane, tcp_addr);
+        let tcp_result = {
+            let mut cached = client_slot.lock().unwrap_or_else(|err| err.into_inner());
+            if cached.as_ref().is_none_or(|client| client.addr != tcp_addr) {
+                *cached = match NetzipRustTcpClient::connect(tcp_addr) {
+                    Ok(client) => Some(client),
+                    Err(error) => {
+                        eprintln!(
+                            "gateway publish lane={} transport=tcp_msgpack connect failed: {error:?}",
+                            lane.label()
+                        );
+                        record_gateway_publish_metric(lane, |metrics| {
+                            metrics.tcp_failures += 1;
+                            metrics.last_error = Some(format!("{error:?}"));
+                        });
+                        None
+                    }
+                };
+            }
+            cached.as_mut().map(|client| client.send(current_payload))
+        };
+        if let Some(result) = tcp_result {
+            match result {
                 Ok(result) => {
+                    record_gateway_publish_metric(lane, |metrics| {
+                        metrics.tcp_successes += 1;
+                        metrics.successes += 1;
+                        metrics.consecutive_failures = 0;
+                        metrics.last_transport = Some("tcp_msgpack".to_string());
+                        metrics.last_error = None;
+                    });
                     *protocol = GatewayPublishProtocol::NetzipRust7709Tcp;
                     let saved_bytes = result.json_bytes.saturating_sub(result.wire_bytes);
                     let saved_percent = if result.json_bytes == 0 {
@@ -6886,21 +7193,58 @@ fn post_quote_gateway_batch_with_tcp(
                         "saved_percent": saved_percent
                     }));
                 }
-                Err(_) => *cached = None,
+                Err(error) => {
+                    eprintln!(
+                        "gateway publish lane={} transport=tcp_msgpack failed: {error:?}",
+                        lane.label()
+                    );
+                    *client_slot.lock().unwrap_or_else(|err| err.into_inner()) = None;
+                    record_gateway_publish_metric(lane, |metrics| {
+                        metrics.tcp_failures += 1;
+                        metrics.last_error = Some(format!("{error:?}"));
+                    });
+                }
             }
         }
     }
+    record_gateway_publish_metric(lane, |metrics| {
+        metrics.http_fallbacks += 1;
+        metrics.last_transport = Some("http_json".to_string());
+    });
     let response = post_quote_gateway_json(
         gateway_addr,
         current_token,
         "/api/source/netzipRust7709/ingest",
         current_payload,
-    )?;
+    );
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            record_gateway_publish_metric(lane, |metrics| {
+                metrics.failures += 1;
+                metrics.consecutive_failures += 1;
+                metrics.last_error = Some(format!("{error:?}"));
+            });
+            return Err(error);
+        }
+    };
     if !(200..300).contains(&response.status) {
-        return Err(quote_gateway_http_error("netzipRust7709", &response));
+        let error = quote_gateway_http_error("netzipRust7709", &response);
+        record_gateway_publish_metric(lane, |metrics| {
+            metrics.failures += 1;
+            metrics.consecutive_failures += 1;
+            metrics.last_error = Some(format!("{error:?}"));
+        });
+        return Err(error);
     }
     *protocol = GatewayPublishProtocol::NetzipRust7709;
-    parse_quote_gateway_success(response)
+    let parsed = parse_quote_gateway_success(response)?;
+    record_gateway_publish_metric(lane, |metrics| {
+        metrics.successes += 1;
+        metrics.consecutive_failures = 0;
+        metrics.last_error = None;
+    });
+    Ok(parsed)
 }
 
 fn post_quote_gateway_json(
@@ -7094,20 +7438,21 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        Auth7100PathFilterRequest, CompactQuote, GatewayPublishProtocol,
+        Auth7100PathFilterRequest, CompactQuote, GatewayPublishLane, GatewayPublishProtocol,
         HqwPublishWorklistResponse, Quote0547CodeTableInfo, Quote0547ScopedRecord,
-        apply_worklist_names, augment_live_quote_symbols, build_netzip_rust_7709_quote_batch,
-        build_quote_0547_code_table_lookup, cache_full_push_session,
-        collect_quote_0547_input_paths, compact_quotes_response_from_result,
-        filter_auth_7100_flow_matrix, filter_auth_7100_shell_correlation, infer_live_quote_market,
-        infer_name_keyword_tag, infer_name_keyword_tags, linux_native_endpoints,
-        linux_phase_skipped, normalize_live_quote_symbol, parse_compact_quote_codes,
-        parse_gateway_worklist, partition_hqw_quotes, post_quote_gateway_batch_with_tcp,
-        pure_rust_linux_hard_blockers, quote_0547_pattern_subbucket,
-        quote_0547_quote_head_state_label, quote_0547_state_matrix_label,
-        quote_0547_time_presence_label, quote_decimal_point_fallback, quote_frame_scan_summary,
-        recommended_delivery_tracks, record_published_full_push_quotes, retry_full_push_batch,
-        retry_full_push_with_reopen, select_new_full_push_quotes, shard_full_push_batches,
+        apply_worklist_names, augment_live_quote_symbols, build_bj_poll_plan,
+        build_netzip_rust_7709_quote_batch, build_quote_0547_code_table_lookup,
+        cache_full_push_session, collect_quote_0547_input_paths,
+        compact_quotes_response_from_result, filter_auth_7100_flow_matrix,
+        filter_auth_7100_shell_correlation, infer_live_quote_market, infer_name_keyword_tag,
+        infer_name_keyword_tags, linux_native_endpoints, linux_phase_skipped,
+        normalize_live_quote_symbol, parse_compact_quote_codes, parse_gateway_worklist,
+        partition_hqw_quotes, post_quote_gateway_batch_with_tcp, pure_rust_linux_hard_blockers,
+        quote_0547_pattern_subbucket, quote_0547_quote_head_state_label,
+        quote_0547_state_matrix_label, quote_0547_time_presence_label,
+        quote_decimal_point_fallback, quote_frame_scan_summary, recommended_delivery_tracks,
+        record_published_full_push_quotes, retry_full_push_batch, retry_full_push_with_reopen,
+        return_full_push_session, select_new_full_push_quotes, shard_full_push_batches,
         split_full_push_batches, split_full_push_upstreams, stable_endpoints,
         take_full_push_session, tdx_0547_public_time_hhmmss, top_scoped_source_groups,
         validated_full_push_worker_count,
@@ -7177,6 +7522,7 @@ mod tests {
             no_current_quote_count: 1,
             no_current_quote_codes: vec!["SZ002036".to_string()],
             last_gateway_response: None,
+            gateway_publish_metrics: BTreeMap::new(),
         };
 
         let json = serde_json::to_value(response).expect("serialize full-push response");
@@ -7341,6 +7687,21 @@ mod tests {
     }
 
     #[test]
+    fn native_push_plans_beijing_polling_as_four_three_second_workers() {
+        let symbols = (0..331)
+            .map(|index| format!("BJ{index:06}"))
+            .collect::<Vec<_>>();
+
+        let plan = build_bj_poll_plan(&symbols, std::time::Duration::from_secs(3))
+            .expect("beijing poll plan");
+
+        assert_eq!(plan.symbols, symbols);
+        assert_eq!(plan.batch_count, 4);
+        assert_eq!(plan.worker_count, 4);
+        assert_eq!(plan.interval, std::time::Duration::from_secs(3));
+    }
+
+    #[test]
     fn full_push_uses_authoritative_worklist_name_when_upstream_name_is_missing() {
         let mut quotes = vec![CompactQuote {
             code: "920000".to_string(),
@@ -7428,6 +7789,7 @@ mod tests {
             &mut protocol,
             true,
             "127.0.0.1:1",
+            GatewayPublishLane::Manual,
         )
         .expect("netzipRust7709 HTTP fallback publish");
         assert_eq!(protocol, GatewayPublishProtocol::NetzipRust7709);
@@ -7891,6 +8253,17 @@ mod tests {
         assert_eq!(take_full_push_session(&cache, "primary"), None);
 
         cache_full_push_session(&cache, "primary", 42usize);
+        assert_eq!(take_full_push_session(&cache, "primary"), Some(42));
+    }
+
+    #[test]
+    fn audit_session_policy_does_not_return_idle_sessions_to_cache() {
+        let cache = std::sync::Mutex::new(BTreeMap::new());
+
+        return_full_push_session(&cache, "primary", Some(41usize), false);
+        assert_eq!(take_full_push_session(&cache, "primary"), None);
+
+        return_full_push_session(&cache, "primary", Some(42usize), true);
         assert_eq!(take_full_push_session(&cache, "primary"), Some(42));
     }
 
