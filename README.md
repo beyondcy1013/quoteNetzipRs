@@ -85,8 +85,23 @@ v2 缓存行迁移到 v3，跨交易日和普通同版本冲突仍按原规则�
 
 - 可以持续推进 Rust 版本，而且当前实施优先级已经切到纯 Rust + Linux。
 - 当前已经有一条不依赖 Windows DLL 的 `7709` Linux 原生链，可直接支撑 `代码表 / 实时行情 / K线 / F10分类`。
-- 如果目标是完整替代 `Stock.dll + 网际风.exe + 127.0.0.1:2000` 整条 Windows 主链，仍需要继续逆 `7100 / 2000` 更深壳层。
+- 纯 Rust 已能使用运行时凭据完成 `7100` 认证；完整替代 Windows 主链仍需继续处理本地 `2000` 及登录后的其它业务壳层。
 - `Ask(...)` 的请求串是 DLL 上层调用语义，不应直接等同为远端 `6100/7100/7709/7719` 的原始网络帧。
+
+### 纯 Rust 7100 认证
+
+`auth_7100_login` 从 `NETZIP_TDX_ACCOUNT / NETZIP_TDX_PASSWORD` 读取凭据，密码不会作为
+命令行参数或结果字段输出。默认认证端点为 `121.41.70.217:7100`，可用
+`NETZIP_TDX_AUTH_HOST / NETZIP_TDX_AUTH_PORT` 覆盖。
+
+```bash
+NETZIP_TDX_ACCOUNT=1522 NETZIP_TDX_PASSWORD='<runtime-secret>' \
+  cargo run --example auth_7100_login
+```
+
+成功结果必须同时满足 `authenticated=true`，以及响应角色顺序
+`zstd_dictionary / download_file / zstd_dictionary`。`status=登录成功` 是 Rust 状态机对完整
+认证响应链的解析结果，不是借用 Wine 回调或离线抓包的状态。
 
 ## 当前分层全景
 

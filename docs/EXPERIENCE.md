@@ -1,5 +1,39 @@
 # NetzipRs Experience
 
+## 2026-08-06 - Complete native Rust authentication for account 1522
+
+### Phenomenon And Root Cause
+
+Wine could authenticate account `1522`, while the Rust path only built the upper-layer Ask text
+and probed TCP reachability. The real 7100 exchange is a three-stage object sequence. The initial
+request is ordinary ZSTD, followed by two vendor dictionary envelopes. During reconstruction, the
+outer metadata's compressed-length field was initially treated as a naturally aligned `u32` at
+offset `148`; the successful packet stores it at the non-aligned offset `146`. Writing at `148`
+overwrote a reserved zero field, so the server returned a normal ZSTD rejection instead of entering
+the dictionary exchange.
+
+### Change
+
+- Add `auth_7100_client` to build the credential-bearing authentication object at runtime, wrap it
+  in the verified `网络包 / penc / ZSTD` envelope, and drive the two follow-up messages.
+- Parse the response roles as `zstd_dictionary / download_file / zstd_dictionary`; only that full
+  sequence produces `authenticated=true` and `status=登录成功`.
+- Add `auth_7100_login`, which reads the password only from `NETZIP_TDX_PASSWORD` and never returns
+  or logs it.
+- Keep account/password bytes out of source and tests. Tests use fixture credentials and assert the
+  non-aligned length field plus the adjacent reserved field.
+
+### Verification
+
+- webClx request `135618-18c8f2f31ead11b1` passed the focused unit tests and built the CLI.
+- The generated 850-byte inner object matched the successful Wine inner object byte-for-byte; the
+  outer packet differed only at the incorrectly patched metadata field before the root fix.
+- Three independent Rust TCP sessions authenticated account `1522`. The first returned packet
+  lengths `441/1540/395`; the next two returned `440/1540/395`. All three parsed the same complete
+  role sequence and returned `authenticated=true` with `status=登录成功`.
+- This verifies native 7100 authentication only. It does not claim that the remaining local 2000
+  bridge or all post-login business protocols have been replaced.
+
 ## 2026-08-06 - Route Rust panel authentication through production account 1522
 
 ### Phenomenon And Root Cause

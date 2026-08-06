@@ -1,5 +1,6 @@
 pub mod api;
 pub mod auth_credentials;
+pub mod auth_7100_client;
 pub mod auth_7100_flow_matrix;
 pub mod auth_7100_prefix;
 pub mod auth_client_shell;
@@ -41,6 +42,9 @@ pub use api::{StockAnswer, StockApi};
 pub use auth_7100_flow_matrix::{
     Auth7100FlowMatrix, Auth7100FlowPacket, Auth7100FlowSession, analyze_auth_7100_flow_matrix,
     analyze_auth_7100_flow_matrix_sample,
+};
+pub use auth_7100_client::{
+    Auth7100ClientConfig, Auth7100LoginResult, build_auth_7100_login_packet, login_auth_7100,
 };
 pub use auth_7100_prefix::{Auth7100PrefixHints, summarize_auth_7100_prefix_hints};
 pub use auth_client_shell::{
