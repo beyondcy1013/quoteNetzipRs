@@ -287,7 +287,20 @@ fn netzip_rust_tcp_client_slot(
 }
 
 fn netzip_rust_tcp_client_key(lane: GatewayPublishLane, tcp_addr: &str) -> String {
-    format!("{}:{tcp_addr}", lane.label())
+    format!(
+        "{}:{tcp_addr}:thread-{:?}",
+        lane.label(),
+        std::thread::current().id()
+    )
+}
+
+fn netzip_rust_tcp_ack_timeout() -> Duration {
+    let seconds = std::env::var("NETZIP_QUOTE_GATEWAY_TCP_ACK_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30)
+        .clamp(5, 120);
+    Duration::from_secs(seconds)
 }
 
 fn record_gateway_publish_metric(
@@ -7006,7 +7019,7 @@ fn get_gateway_worklist(gateway_addr: &str, limit: usize) -> Result<serde_json::
         ))
     })?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(netzip_rust_tcp_ack_timeout()))
         .map_err(|err| ApiError::internal(format!("set gateway read timeout failed: {err}")))?;
     write!(
         stream,

@@ -292,3 +292,12 @@ zero even when the sender could not receive an ACK.
 - Transport contract test proves main and BJ lanes use distinct client slots.
 - TCP failure is visible with its lane and error, followed by an explicit HTTP fallback event.
 - A failed batch does not advance the published watermark or terminate the rest of the active loop.
+
+## 2026-08-06 - Isolate same-lane ACK ordering and bound ACK waits
+
+Post-deployment logs showed that lane-level isolation alone was insufficient: concurrent workers
+within one lane could still share one persistent ACK sequence, and the fixed 10-second read timeout
+produced `EAGAIN` while quoteGateway was completing its ingest/broadcast path. TCP client slots now
+include the worker thread identity, preventing same-lane workers from sharing sequence state. ACK read
+timeout is configurable through `NETZIP_QUOTE_GATEWAY_TCP_ACK_TIMEOUT_SECS`, defaulting to 30 seconds
+and clamped to 5-120 seconds. The full workspace regression passed with status 0.
