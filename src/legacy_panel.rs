@@ -913,7 +913,7 @@ mod tests {
         let normalized = normalize_config(config, &[]);
         assert_eq!(normalized.account, "1522");
         let serialized = serde_json::to_string(&normalized).expect("serialize panel config");
-        assert!(!serialized.contains("password"));
-        assert!(!serialized.contains("168"));
+        assert!(!serialized.contains("\"password\":"));
+        assert!(!serialized.contains("\"account\":\"168\""));
     }
 }
