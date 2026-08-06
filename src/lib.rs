@@ -1,9 +1,9 @@
 pub mod api;
-pub mod auth_credentials;
 pub mod auth_7100_client;
 pub mod auth_7100_flow_matrix;
 pub mod auth_7100_prefix;
 pub mod auth_client_shell;
+pub mod auth_credentials;
 pub mod auth_download;
 pub mod auth_flow_sample;
 pub mod capture_input;
@@ -39,12 +39,14 @@ pub(crate) fn repository_fixture_path(relative: &str) -> std::path::PathBuf {
 }
 
 pub use api::{StockAnswer, StockApi};
+pub use auth_7100_client::{
+    Auth7100ClientConfig, Auth7100LoginResult, Auth7100ProbeResult, DEFAULT_AUTH_HOST,
+    DEFAULT_LOGIN_PORT, DEFAULT_PROBE_PORTS, STOCK_DICTIONARY_SHA256, build_auth_7100_login_packet,
+    build_auth_7100_probe_packet, login_auth_6100, login_auth_7100, probe_auth_server,
+};
 pub use auth_7100_flow_matrix::{
     Auth7100FlowMatrix, Auth7100FlowPacket, Auth7100FlowSession, analyze_auth_7100_flow_matrix,
     analyze_auth_7100_flow_matrix_sample,
-};
-pub use auth_7100_client::{
-    Auth7100ClientConfig, Auth7100LoginResult, build_auth_7100_login_packet, login_auth_7100,
 };
 pub use auth_7100_prefix::{Auth7100PrefixHints, summarize_auth_7100_prefix_hints};
 pub use auth_client_shell::{
@@ -56,7 +58,7 @@ pub use auth_client_shell::{
 };
 pub use auth_download::{
     DownloadedServerConfig, DownloadedServerEntry, load_downloaded_server_config_sample,
-    parse_downloaded_server_config_from_path,
+    parse_downloaded_server_config_from_path, parse_server_entries_from_packet_bytes,
 };
 pub use auth_flow_sample::{
     Auth7100ServerPacketAnalysis, Auth7100ServerSampleAnalysis, Auth7100ZstdFrameSummary,

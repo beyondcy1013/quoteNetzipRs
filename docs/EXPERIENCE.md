@@ -1,5 +1,40 @@
 # NetzipRs Experience
 
+## 2026-08-07 06:35 +08:00 - Accept single-port 5188 entries after authenticated 6100 login
+
+### Phenomenon And Root Cause
+
+One authorized Rust account-1522 run completed the expected 6100 response-role sequence, decoded
+the `Stock.字典` responses, and confirmed the decoded `登录成功` marker, but then returned
+`decoded download response contained no 5188 quote endpoint`. The failure was generated upstream
+in server-list extraction: `parse_server_entry` required exactly four comma-separated fields, and
+`is_config_line` also required at least three commas. The installed vendor configuration contains
+valid single-port rows in the form `name, host, port`, including a 5188 row, so the extractor
+discarded the line before endpoint selection.
+
+### Change
+
+- Accept both `name, host, main_port, secondary_port` and `name, host, port` server rows.
+- For a three-field row, use the single port for both `main_port` and `secondary_port`; preserve
+  four-field behavior and reject all other field counts.
+- Recognize two-comma rows as candidate configuration lines so the UTF-16 packet extractor retains
+  them for the structured parser.
+- Keep the authentication result limited to structured server entries; do not expose the decoded
+  raw configuration, password, or opaque session values.
+
+### Verification And Boundary
+
+- `auth_download::tests`: 5 passed, including the installed three-field 5188 shape.
+- `auth_7100_client::tests`: 6 passed, covering probe/login construction, response roles, and raw
+  dictionary decoding.
+- `cargo check --example auth_7100_login` and `cargo fmt --all -- --check` passed.
+- Full library testing reached 95 passed and 1 failed; the only failure is the pre-existing
+  `auth_7100_flow_matrix::tests::accepts_pcapng_capture_via_tcpdump_conversion` because this
+  Windows host has no `tcpdump` executable.
+- No second real login was performed. The parser fix is offline-verified but not live-retested.
+- This proves the narrow 6100/7100 login and 5188 extraction path only. Dynamic follow-up fields,
+  7709 `Tdx_Encrypt` bootstrap, reconnect/failover, and long-lived session equivalence remain open.
+
 ## 2026-08-06 - Bound gateway TCP client cache after CLOSE-WAIT exhaustion
 
 ### Phenomenon And Root Cause

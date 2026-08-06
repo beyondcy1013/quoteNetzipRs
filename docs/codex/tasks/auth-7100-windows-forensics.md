@@ -1,6 +1,6 @@
 # Windows 7100 Authentication Forensics
 
-Updated: 2026-08-06
+Updated: 2026-08-07
 
 ## Objective
 
@@ -53,3 +53,81 @@ protocol or the Linux production service.
   disrupt the production account session. The historical reconnect capture is retained only as
   an explicitly labeled comparison.
 - Deliverables live in `docs/forensics/7100-auth-20260806/`.
+
+## 2026-08-07 Narrow Rust Reproduction Consensus
+
+### Goal
+
+Turn the current standalone authentication proof into a protocol-aligned Rust implementation for
+7100/6100 probing, formal 6100 login, `Stock.字典` response decoding, and 5188 server-list parsing.
+
+### Boundaries
+
+- Use the existing `auth_7100_client` module and repository ZSTD dependency rather than creating a
+  second authentication stack.
+- Treat 7100 as a probe endpoint and 6100 as the formal login endpoint.
+- Read real credentials only through the existing permission-controlled runtime source. Never log,
+  serialize, commit, or retain the password or reusable session values.
+- Permit at most one isolated real-account `1522` 6100 login for final acceptance. Do not stop or
+  modify the production vendor process.
+- Do not deploy or replace the Linux production service or binary in this task.
+
+### Acceptance Criteria
+
+- Tests prove the probe and login packets use their distinct protocol roles and endpoints.
+- `field44=12` packets decode with `Stock.字典` as a raw-content ZSTD dictionary, with dictionary
+  identity exposed only as length and SHA-256.
+- The download-file response parser extracts valid 5188 endpoints without retaining credentials or
+  opaque token values.
+- Authentication success requires decoded protocol evidence, not only response role names.
+- The result exposes the selected authentication endpoint, response roles and lengths, dictionary
+  fingerprint, and discovered 5188 endpoints without exposing the password.
+- One authorized live 6100 login succeeds, or the exact server-side incompatibility is recorded if
+  the evidence-derived implementation is rejected.
+
+### Key Decisions And Risks
+
+- Extend the existing module; do not add a new dependency or a parallel client abstraction.
+- Preserve unknown decoded fields as length/hash evidence until their semantics are proven.
+- The retained sanitized capture masks the 6100 application payload, so representative decoded
+  response bytes must come from existing constants/tests or the single authorized live session.
+- Hard-coded follow-up packets may contain session- or installation-specific fields; the
+  implementation must identify and validate their dynamic boundary before claiming portability.
+
+### Out Of Scope
+
+- `Stock.dll` injection, `send`/`recv` hooking, or dynamic `Tdx_Encrypt` capture.
+- Controlled authentication failure, forced disconnect, automatic reconnect, or failover testing.
+- Claiming 6100 session fields are 7709/0547 bootstrap parameters without new hook evidence.
+- Resident-service integration, production deployment, or long-lived same-account ownership policy.
+
+## 2026-08-07 Implementation Result
+
+- Rust now has distinct evidence-derived builders and entry points for the credential-bearing
+  6100/7100 probe and the formal 6100 login sequence. The login decoder validates the tracked
+  `Stock.字典` by length and SHA-256 before using it as a raw-content ZSTD dictionary.
+- One authorized real-account login reached the expected three-response sequence, decoded the
+  dictionary responses, and found the decoded `登录成功` marker. No additional real login was run.
+- That live run then returned `decoded download response contained no 5188 quote endpoint`.
+  Offline investigation traced this to the server-list parser accepting only four-field rows while
+  the installed vendor configuration contains three-field rows such as
+  `name, host, port` for 5188.
+- The parser now accepts both formats. A three-field row maps its single port to both `main_port`
+  and `secondary_port`; four-field behavior is unchanged. Focused parser and authentication tests
+  pass, and the authentication CLI builds.
+- The three-field fix is offline-verified only. It was deliberately not live-retested because the
+  task's one-login authorization was already consumed and another login could disrupt the active
+  account session.
+- Focused parser/authentication tests pass; the full library has 95 passing tests and one known
+  Windows-only infrastructure failure because `tcpdump` is unavailable.
+- The retained follow-up request templates remain evidence samples rather than a proven portable
+  dynamic generator. Their decoded roles match the fresh account-1522 flow, but the current
+  271-byte template differs from the fresh 267-byte evidence sample.
+
+### Current Readiness Decision
+
+- Sufficient now: 6100/7100 probing, formal 6100 login packet construction, response-role
+  validation, raw-content dictionary decoding, and three-/four-field 5188 list extraction.
+- Still unproven: byte-portable dynamic follow-up construction, 6100 session-field semantics,
+  `Tdx_Encrypt` participation in 7709 bootstrap, long-lived reconnect/failover behavior, and
+  equivalence with the production 7709/0547 session chain.

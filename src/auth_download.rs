@@ -17,7 +17,7 @@ const DOWNLOAD_TOP_LEVEL_LABELS: [&str; 9] = [
     "扩展",
 ];
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadedServerEntry {
     pub group_name: Option<String>,
     pub name: String,
@@ -106,6 +106,18 @@ pub fn parse_downloaded_server_config_from_path(
         disabled_servers: parsed.disabled_servers,
         raw_text,
     })
+}
+
+/// Extracts only active server entries from an in-memory download packet.
+///
+/// The full config parser is intentionally not used by the live auth result because it also
+/// exposes legacy account/password fields and the raw UTF-16 configuration text.
+pub fn parse_server_entries_from_packet_bytes(
+    packet_bytes: &[u8],
+) -> Result<Vec<DownloadedServerEntry>, Box<dyn Error>> {
+    let raw_text = extract_embedded_utf16_text(packet_bytes)
+        .ok_or("no embedded UTF-16 server configuration text found")?;
+    Ok(parse_server_config_text(&raw_text).active_servers)
 }
 
 #[derive(Default)]
@@ -198,16 +210,19 @@ fn parse_server_entry(
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .collect::<Vec<_>>();
-    if parts.len() != 4 {
-        return None;
-    }
+    let main_port = parts.get(2)?.parse::<u16>().ok()?;
+    let secondary_port = match parts.as_slice() {
+        [_, _, _] => main_port,
+        [_, _, _, secondary_port] => secondary_port.parse::<u16>().ok()?,
+        _ => return None,
+    };
 
     Some(DownloadedServerEntry {
         group_name,
         name: parts[0].to_string(),
         host: parts[1].to_string(),
-        main_port: parts[2].parse::<u16>().ok()?,
-        secondary_port: parts[3].parse::<u16>().ok()?,
+        main_port,
+        secondary_port,
         enabled,
     })
 }
@@ -316,7 +331,7 @@ fn is_config_line(line: &str) -> bool {
     if (line.starts_with('[') && line.ends_with(']')) || line.starts_with("//") {
         return true;
     }
-    if line.contains('=') || line.matches(',').count() >= 3 {
+    if line.contains('=') || line.matches(',').count() >= 2 {
         return true;
     }
     false
@@ -395,7 +410,10 @@ fn decode_utf16_tail(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_config_line, load_downloaded_server_config_sample, parse_server_config_text};
+    use super::{
+        is_config_line, load_downloaded_server_config_sample, parse_server_config_text,
+        parse_server_entries_from_packet_bytes,
+    };
 
     #[test]
     fn parses_downloaded_server_text() {
@@ -419,7 +437,45 @@ mod tests {
         assert!(is_config_line("//华泰"));
         assert!(is_config_line("账号 = NetCardMac"));
         assert!(is_config_line("南京移动, 120.195.71.160, 7709, 7709"));
+        assert!(is_config_line("本地登录5188, 127.0.0.1, 5188"));
         assert!(!is_config_line("garbled binary"));
+    }
+
+    #[test]
+    fn parses_active_server_entries_without_returning_config_credentials() {
+        let text = "\u{feff}[行情服务器]\n\n上海主站, 103.141.11.1, 5188, 5188\n深圳备用, 103.141.11.2, 5188, 5189\n";
+        let mut packet = vec![0u8; 422];
+        for word in text.encode_utf16() {
+            packet.extend_from_slice(&word.to_le_bytes());
+        }
+
+        let entries = parse_server_entries_from_packet_bytes(&packet).expect("server entries");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].host, "103.141.11.1");
+        assert_eq!(entries[0].main_port, 5188);
+        assert!(entries.iter().all(|entry| entry.enabled));
+    }
+
+    #[test]
+    fn parses_single_port_5188_server_entry() {
+        let text = "\u{feff}[行情服务器]\n\n本地登录5188, 127.0.0.1, 5188\n";
+        let mut packet = vec![0u8; 422];
+        for word in text.encode_utf16() {
+            packet.extend_from_slice(&word.to_le_bytes());
+        }
+
+        let entries = parse_server_entries_from_packet_bytes(&packet).expect("server entries");
+        assert_eq!(
+            entries,
+            vec![super::DownloadedServerEntry {
+                group_name: None,
+                name: "本地登录5188".to_string(),
+                host: "127.0.0.1".to_string(),
+                main_port: 5188,
+                secondary_port: 5188,
+                enabled: true,
+            }]
+        );
     }
 
     #[test]
