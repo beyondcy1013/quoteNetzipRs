@@ -287,11 +287,9 @@ fn netzip_rust_tcp_client_slot(
 }
 
 fn netzip_rust_tcp_client_key(lane: GatewayPublishLane, tcp_addr: &str) -> String {
-    format!(
-        "{}:{tcp_addr}:thread-{:?}",
-        lane.label(),
-        std::thread::current().id()
-    )
+    // Keep one bounded persistent client per lane and gateway address. Including
+    // a request thread ID retained sockets after short-lived audit/API threads exited.
+    format!("{}:{tcp_addr}", lane.label())
 }
 
 fn netzip_rust_tcp_ack_timeout() -> Duration {
@@ -371,6 +369,19 @@ mod netzip_rust_tcp_transport_contract_tests {
             super::netzip_rust_tcp_client_key(super::GatewayPublishLane::Main, "127.0.0.1:16889"),
             super::netzip_rust_tcp_client_key(super::GatewayPublishLane::Bj, "127.0.0.1:16889")
         );
+    }
+
+    #[test]
+    fn transport_slot_is_stable_across_short_lived_threads() {
+        let expected =
+            super::netzip_rust_tcp_client_key(super::GatewayPublishLane::Main, "127.0.0.1:16889");
+        let actual = std::thread::spawn(|| {
+            super::netzip_rust_tcp_client_key(super::GatewayPublishLane::Main, "127.0.0.1:16889")
+        })
+        .join()
+        .expect("transport key thread");
+
+        assert_eq!(actual, expected);
     }
 }
 

@@ -1,5 +1,24 @@
 # NetzipRs Experience
 
+## 2026-08-06 - Bound gateway TCP client cache after CLOSE-WAIT exhaustion
+
+### Phenomenon And Root Cause
+
+The resident `netzip_service` reached its 1024-file-descriptor soft limit with roughly 922
+`CLOSE-WAIT` sockets. Push shards and Beijing polling then reported `Too many open files`. The
+gateway client cache key included the current request thread ID, so short-lived API/audit threads
+created new persistent client entries that remained in the global cache after the threads exited.
+
+### Change And Verification
+
+- Key gateway TCP client slots only by publish lane and gateway address, preserving main/BJ/manual
+  isolation while bounding the normal cache to one client per lane/address.
+- Add a regression test proving the same lane/address maps to one slot across short-lived threads.
+- webClx request `151034-18c8f2f31ead11b9` passed the focused transport tests; request
+  `151138-18c8f2f31ead11bc` passed the workspace regression (148 tests) and authentication CLI build.
+- Deployment must recheck fd count, `CLOSE-WAIT`, reader failures, gateway ACK failures, and BJ
+  polling after the old process is replaced; existing leaked descriptors cannot be reclaimed in place.
+
 ## 2026-08-06 - Complete native Rust authentication for account 1522
 
 ### Phenomenon And Root Cause
