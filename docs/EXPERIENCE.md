@@ -354,3 +354,37 @@ produced `EAGAIN` while quoteGateway was completing its ingest/broadcast path. T
 include the worker thread identity, preventing same-lane workers from sharing sequence state. ACK read
 timeout is configurable through `NETZIP_QUOTE_GATEWAY_TCP_ACK_TIMEOUT_SECS`, defaulting to 30 seconds
 and clamped to 5-120 seconds. The full workspace regression passed with status 0.
+
+## 2026-08-06 - Prove the real 1522 authentication split and ZSTD dictionary
+
+### Phenomenon
+
+Older notes treated port 7100 as the complete authentication exchange and treated `field44=12`
+frames as an opaque or encrypted ZSTD-like shell. A fresh Windows capture was needed without
+changing the Rust protocol or interrupting the resident production TdxW session.
+
+### Root Cause
+
+The vendor client separates authentication into two paths. It sends an identical `认证|测速`
+request to 6100 and 7100, then opens a new 6100 flow for `认证|登录`. Standard ZSTD alone cannot
+decode the later `field44=12` frames because they require the installed `Stock.字典` as raw-content
+dictionary data.
+
+### Evidence
+
+- Real-account 7100 probe: 427-byte request, 345-byte response.
+- Real-account 6100 login: 633-byte request; decompressed account field matches `1522`, while the
+  password is retained only as offset 134 and declared length 12.
+- `Stock.字典` SHA-256
+  `8f44f49cbf10c8d203d9cabbda256da37c1f7d43e7f99b60c08d077c47b2bc68` decoded all 66 fresh
+  `field44=12` samples with zero failures.
+- The post-login process connected to `103.141.11.1:5188`; it did not open 7709/0547. Pre-existing
+  production 7708/7719 traffic was excluded by process/timestamp correlation.
+- Sanitized evidence and original block offsets are under
+  `docs/forensics/7100-auth-20260806/`.
+
+### Consequence
+
+The next Rust step is no longer reverse-engineering an unknown dictionary. It is aligning raw
+dictionary compression parameters and dynamic object templates, then separately proving the 7709
+`Tdx_Encrypt` bootstrap. Do not infer a 7709 session token from this 5188 login path.
