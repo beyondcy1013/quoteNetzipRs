@@ -883,7 +883,7 @@ fn manifest_path(rel: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_key_values, split_comment, split_name_port};
+    use super::{load_reference_config, normalize_config, parse_key_values, split_comment, split_name_port};
 
     #[test]
     fn parses_comment_and_name_port() {
@@ -905,5 +905,15 @@ mod tests {
         assert_eq!(values.get("账号").map(String::as_str), Some("168"));
         assert_eq!(values.get("自动升级").map(String::as_str), Some("稳定版"));
         assert_eq!(values.get("登录股票备用").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn normalizes_legacy_account_to_production_account_and_redacts_password() {
+        let config = load_reference_config(&[]).expect("reference config");
+        let normalized = normalize_config(config, &[]);
+        assert_eq!(normalized.account, "1522");
+        let serialized = serde_json::to_string(&normalized).expect("serialize panel config");
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("168"));
     }
 }
