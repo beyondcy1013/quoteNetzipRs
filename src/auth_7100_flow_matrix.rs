@@ -127,14 +127,9 @@ pub fn analyze_auth_7100_flow_matrix(
     path: impl AsRef<Path>,
 ) -> Result<Auth7100FlowMatrix, Box<dyn Error>> {
     let path = path.as_ref();
-    let server = Endpoint {
-        ip: Ipv4Addr::new(39, 108, 103, 69),
-        port: 7100,
-    };
-    let local_host = Ipv4Addr::new(192, 168, 3, 38);
-
     let bytes = read_capture_file_as_pcap_bytes(path)?;
     let parsed = parse_pcap(&bytes)?;
+    let (local_host, server) = discover_7100_endpoints(&parsed)?;
     let mut seen = HashSet::new();
     let mut sessions = BTreeMap::<Endpoint, SessionPackets>::new();
 
@@ -207,6 +202,18 @@ pub fn analyze_auth_7100_flow_matrix(
         server_endpoint: display_ep(server),
         sessions: summarized,
     })
+}
+
+fn discover_7100_endpoints(packets: &[TcpPacket]) -> Result<(Ipv4Addr, Endpoint), Box<dyn Error>> {
+    let packet = packets
+        .iter()
+        .find(|packet| packet.src.port == 7100 || packet.dst.port == 7100)
+        .ok_or("capture contains no TCP/7100 packets")?;
+    if packet.src.port == 7100 {
+        Ok((packet.dst.ip, packet.src))
+    } else {
+        Ok((packet.src.ip, packet.dst))
+    }
 }
 
 fn classify_session(
