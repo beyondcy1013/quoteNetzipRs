@@ -73,6 +73,13 @@ pub fn login_auth_6100(
     login_auth_sequence(config, Some(dictionary))
 }
 
+/// Runs formal login with the verified repository dictionary without exposing its bytes.
+pub fn login_auth_6100_with_verified_dictionary(
+    config: &Auth7100ClientConfig,
+) -> Result<Auth7100LoginResult, Box<dyn Error>> {
+    login_auth_sequence(config, Some(STOCK_DICTIONARY_BYTES))
+}
+
 /// Sends the same credential-bearing `认证|测速` packet to one authentication candidate.
 pub fn probe_auth_server(
     config: &Auth7100ClientConfig,

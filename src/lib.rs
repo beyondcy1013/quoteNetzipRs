@@ -42,7 +42,8 @@ pub use api::{StockAnswer, StockApi};
 pub use auth_7100_client::{
     Auth7100ClientConfig, Auth7100LoginResult, Auth7100ProbeResult, DEFAULT_AUTH_HOST,
     DEFAULT_LOGIN_PORT, DEFAULT_PROBE_PORTS, STOCK_DICTIONARY_SHA256, build_auth_7100_login_packet,
-    build_auth_7100_probe_packet, login_auth_6100, login_auth_7100, probe_auth_server,
+    build_auth_7100_probe_packet, login_auth_6100, login_auth_6100_with_verified_dictionary,
+    login_auth_7100, probe_auth_server,
 };
 pub use auth_7100_flow_matrix::{
     Auth7100FlowMatrix, Auth7100FlowPacket, Auth7100FlowSession, analyze_auth_7100_flow_matrix,

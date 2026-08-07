@@ -9,19 +9,21 @@ use axum::{
 use netzipapi_rust_demo::tdx_0547_scheduler::{QuoteRenewalScheduler, RenewalRateGate};
 use netzipapi_rust_demo::tdx_push_coalescer::{TdxPushCoalescer, TdxPushEvent};
 use netzipapi_rust_demo::{
-    FIN_GETTER_UNRESOLVED_IDS, ProtoProbeConfig, ProtoProbeEncoding as ProbeEncoding,
-    QuoteReplayConfig, SH_FIN_URL, SZ_FIN_URL, Tdx7709Config, Tdx7709QuoteRequestItem,
-    Tdx7709Session, analyze_auth_7100_client_shell_sample, analyze_auth_7100_flow_matrix,
-    analyze_auth_7100_flow_matrix_sample, analyze_auth_7100_server_sample,
-    analyze_auth_7100_shell_correlation_from_pcap, analyze_auth_7100_shell_correlation_sample,
-    analyze_local_2000_log_file, analyze_local_2000_vs_auth7100,
-    analyze_local_2000_vs_auth7100_sample, analyze_stream_file, build_bootstrap_packets,
-    build_probe_hello, compare_blob_files, connect_legacy_panel, disconnect_legacy_panel,
-    fetch_f10_categories, fetch_f10_content, fetch_kline, fetch_live_quotes, fin_getter_specs,
-    load_legacy_panel_bootstrap, parse_answer_buffer, parse_fin_file, parse_quote_segments,
-    parse_tdx_0547_body, probe_legacy_servers, probe_proto, query_tdx_0547_records,
-    replay_quote_file, save_legacy_panel_config, scan_quote_frame_file,
-    summarize_from_answer_buffer, summarize_pcap_file, sync_code_table,
+    Auth7100ClientConfig, Auth7100LoginResult, Auth7100ProbeResult, DEFAULT_AUTH_HOST,
+    DEFAULT_LOGIN_PORT, DEFAULT_PROBE_PORTS, FIN_GETTER_UNRESOLVED_IDS, ProtoProbeConfig,
+    ProtoProbeEncoding as ProbeEncoding, QuoteReplayConfig, SH_FIN_URL, SZ_FIN_URL, Tdx7709Config,
+    Tdx7709QuoteRequestItem, Tdx7709Session, analyze_auth_7100_client_shell_sample,
+    analyze_auth_7100_flow_matrix, analyze_auth_7100_flow_matrix_sample,
+    analyze_auth_7100_server_sample, analyze_auth_7100_shell_correlation_from_pcap,
+    analyze_auth_7100_shell_correlation_sample, analyze_local_2000_log_file,
+    analyze_local_2000_vs_auth7100, analyze_local_2000_vs_auth7100_sample, analyze_stream_file,
+    build_bootstrap_packets, build_probe_hello, compare_blob_files, connect_legacy_panel,
+    disconnect_legacy_panel, fetch_f10_categories, fetch_f10_content, fetch_kline,
+    fetch_live_quotes, fin_getter_specs, load_legacy_panel_bootstrap,
+    login_auth_6100_with_verified_dictionary, parse_answer_buffer, parse_fin_file,
+    parse_quote_segments, parse_tdx_0547_body, probe_auth_server, probe_legacy_servers,
+    probe_proto, query_tdx_0547_records, replay_quote_file, save_legacy_panel_config,
+    scan_quote_frame_file, summarize_from_answer_buffer, summarize_pcap_file, sync_code_table,
     tdx_0547_extra0_time_hint_seconds, tdx_0547_format_hhmmss_raw, tdx_0547_hhmmss_raw_to_seconds,
     tdx_0547_market_name, tdx_0547_normalize_quote_head, tdx_0547_public_time_hhmmss,
     tdx_0547_record_symbol, write_code_table_csv, write_fin_csv,
@@ -33,7 +35,7 @@ use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static FULL_PUSH_SESSION_CACHE: OnceLock<Mutex<BTreeMap<String, Tdx7709Session>>> = OnceLock::new();
 static FULL_PUSH_LAST_PUBLISHED_AT: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
@@ -322,6 +324,77 @@ fn gateway_publish_metrics_snapshot() -> BTreeMap<String, GatewayPublishMetrics>
 struct AppState {
     service_name: &'static str,
     version: &'static str,
+    auth: Arc<AuthRuntime>,
+}
+
+struct AuthRuntime {
+    state: Mutex<AuthStatusResponse>,
+    login_in_progress: Mutex<bool>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AuthStatusResponse {
+    phase: String,
+    account: String,
+    password_source: String,
+    probes: Vec<Auth7100ProbeResult>,
+    probe_errors: Vec<String>,
+    selected_auth_endpoint: Option<String>,
+    response_roles: Vec<String>,
+    response_packet_lengths: Vec<usize>,
+    dictionary_length: Option<usize>,
+    dictionary_sha256: Option<String>,
+    login_success_confirmed: bool,
+    active_server_count: usize,
+    selected_quote_endpoint: Option<String>,
+    selected_7709_endpoint: Option<String>,
+    last_error: Option<String>,
+    attempt_started_at: Option<u64>,
+    completed_at: Option<u64>,
+}
+
+impl Default for AuthStatusResponse {
+    fn default() -> Self {
+        let credentials = netzipapi_rust_demo::auth_credentials::load(None, None);
+        Self {
+            phase: "idle".to_string(),
+            account: credentials.account,
+            password_source: credentials.password_source.to_string(),
+            probes: Vec::new(),
+            probe_errors: Vec::new(),
+            selected_auth_endpoint: None,
+            response_roles: Vec::new(),
+            response_packet_lengths: Vec::new(),
+            dictionary_length: None,
+            dictionary_sha256: None,
+            login_success_confirmed: false,
+            active_server_count: 0,
+            selected_quote_endpoint: None,
+            selected_7709_endpoint: None,
+            last_error: None,
+            attempt_started_at: None,
+            completed_at: None,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AuthLoginResponse {
+    accepted: bool,
+    status: AuthStatusResponse,
+}
+
+#[cfg(test)]
+mod resident_auth_contract_tests {
+    use super::AuthStatusResponse;
+
+    #[test]
+    fn status_serialization_never_contains_password_field() {
+        let encoded = serde_json::to_string(&AuthStatusResponse::default()).expect("status json");
+        assert!(!encoded.contains("\"password\""));
+        assert!(!encoded.contains("secret"));
+        assert!(encoded.contains("password_source"));
+    }
 }
 
 #[cfg(test)]
@@ -1563,6 +1636,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         service_name: "netzip-rs",
         version: env!("CARGO_PKG_VERSION"),
+        auth: Arc::new(AuthRuntime {
+            state: Mutex::new(AuthStatusResponse::default()),
+            login_in_progress: Mutex::new(false),
+        }),
     };
 
     let app = Router::new()
@@ -1573,6 +1650,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/webgui/favicon.ico", get(web_favicon))
         .route("/webgui/styles.css", get(web_styles))
         .route("/health", get(health))
+        .route("/api/auth/status", get(auth_status))
+        .route("/api/auth/login", post(auth_login))
         .route("/api/capabilities", get(capabilities))
         .route("/api/quotes", get(compact_quotes))
         .route("/api/hqw/publish", post(hqw_publish))
@@ -1658,6 +1737,148 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     })
 }
 
+async fn auth_status(State(state): State<AppState>) -> Json<AuthStatusResponse> {
+    Json(
+        state
+            .auth
+            .state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone(),
+    )
+}
+
+async fn auth_login(State(state): State<AppState>) -> Result<Json<AuthLoginResponse>, ApiError> {
+    {
+        let mut running = state
+            .auth
+            .login_in_progress
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if *running {
+            return Err(ApiError {
+                status: StatusCode::CONFLICT,
+                message: "authentication attempt already running".to_string(),
+            });
+        }
+        *running = true;
+    }
+
+    let started = unix_timestamp();
+    {
+        let mut status = state
+            .auth
+            .state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        status.phase = "running".to_string();
+        status.account = netzipapi_rust_demo::auth_credentials::load(None, None).account;
+        status.password_source = netzipapi_rust_demo::auth_credentials::load(None, None)
+            .password_source
+            .to_string();
+        status.probes.clear();
+        status.probe_errors.clear();
+        status.last_error = None;
+        status.attempt_started_at = Some(started);
+        status.completed_at = None;
+    }
+
+    let auth = state.auth.clone();
+    let result = tokio::task::spawn_blocking(move || run_authentication()).await;
+    let outcome = match result {
+        Ok(Ok((probes, probe_errors, login))) => {
+            let mut status = auth.state.lock().unwrap_or_else(|err| err.into_inner());
+            status.probes = probes;
+            status.probe_errors = probe_errors;
+            apply_login_result(&mut status, login);
+            status.phase = "succeeded".to_string();
+            status.completed_at = Some(unix_timestamp());
+            AuthLoginResponse {
+                accepted: true,
+                status: status.clone(),
+            }
+        }
+        Ok(Err(error)) => {
+            let mut status = auth.state.lock().unwrap_or_else(|err| err.into_inner());
+            status.phase = "failed".to_string();
+            status.last_error = Some(error);
+            status.completed_at = Some(unix_timestamp());
+            AuthLoginResponse {
+                accepted: true,
+                status: status.clone(),
+            }
+        }
+        Err(error) => {
+            let mut status = auth.state.lock().unwrap_or_else(|err| err.into_inner());
+            status.phase = "failed".to_string();
+            status.last_error = Some(format!("authentication worker failed: {error}"));
+            status.completed_at = Some(unix_timestamp());
+            AuthLoginResponse {
+                accepted: true,
+                status: status.clone(),
+            }
+        }
+    };
+    *auth
+        .login_in_progress
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = false;
+    Ok(Json(outcome))
+}
+
+fn run_authentication()
+-> Result<(Vec<Auth7100ProbeResult>, Vec<String>, Auth7100LoginResult), String> {
+    let credentials = netzipapi_rust_demo::auth_credentials::load(None, None);
+    let password = credentials
+        .password
+        .ok_or_else(|| "1522 password is not configured in NETZIP_TDX_PASSWORD".to_string())?;
+    let mut probes = Vec::new();
+    let mut probe_errors = Vec::new();
+    for port in DEFAULT_PROBE_PORTS {
+        let config = Auth7100ClientConfig {
+            host: DEFAULT_AUTH_HOST.to_string(),
+            port,
+            account: credentials.account.clone(),
+            password: password.clone(),
+            timeout: Duration::from_secs(5),
+        };
+        match probe_auth_server(&config) {
+            Ok(probe) => probes.push(probe),
+            Err(error) => probe_errors.push(format!("{port}: {error}")),
+        }
+    }
+    let config = Auth7100ClientConfig {
+        host: DEFAULT_AUTH_HOST.to_string(),
+        port: DEFAULT_LOGIN_PORT,
+        account: credentials.account,
+        password,
+        timeout: Duration::from_secs(8),
+    };
+    let login =
+        login_auth_6100_with_verified_dictionary(&config).map_err(|error| error.to_string())?;
+    Ok((probes, probe_errors, login))
+}
+
+fn apply_login_result(status: &mut AuthStatusResponse, login: Auth7100LoginResult) {
+    status.account = login.account;
+    status.selected_auth_endpoint = Some(login.endpoint);
+    status.response_roles = login.response_roles;
+    status.response_packet_lengths = login.response_packet_lengths;
+    status.dictionary_length = login.dictionary_length;
+    status.dictionary_sha256 = login.dictionary_sha256;
+    status.login_success_confirmed = login.login_success_confirmed;
+    status.active_server_count = login.quote_servers.len();
+    status.selected_quote_endpoint = login.selected_quote_endpoint;
+    status.selected_7709_endpoint = login.selected_7709_endpoint;
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
 async fn capabilities() -> Json<CapabilitiesResponse> {
     Json(CapabilitiesResponse {
         service: "netzip-rs",
@@ -1681,6 +1902,8 @@ fn stable_endpoints() -> Vec<&'static str> {
         "GET /webgui/app.js",
         "GET /webgui/styles.css",
         "GET /health",
+        "GET /api/auth/status",
+        "POST /api/auth/login",
         "GET /api/capabilities",
         "GET /api/quotes",
         "POST /api/hqw/publish",
@@ -1732,6 +1955,8 @@ fn stable_endpoints() -> Vec<&'static str> {
 fn linux_native_endpoints() -> Vec<&'static str> {
     vec![
         "GET /health",
+        "GET /api/auth/status",
+        "POST /api/auth/login",
         "GET /api/capabilities",
         "GET /api/quotes",
         "POST /api/hqw/publish",

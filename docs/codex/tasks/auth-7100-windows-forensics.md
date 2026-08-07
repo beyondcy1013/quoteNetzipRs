@@ -145,3 +145,16 @@ Turn the current standalone authentication proof into a protocol-aligned Rust im
 - The baseline `plain_0118.bin` / `cipher_0118.bin` files are not accepted as a proven
   `Tdx_Encrypt` pair. They predate the current task, do not match the tracked 7709 TCP streams, and
   the capture scripts overwrite uncorrelated events under fixed filenames.
+
+## 2026-08-07 Resident Authentication Control
+
+- Added an explicit resident-service `POST /api/auth/login` operation and `GET /api/auth/status`.
+- Credentials are loaded only from `auth_credentials::load(None, None)`; HTTP never accepts or
+  returns a password. The operation runs in `spawn_blocking` and rejects concurrent attempts.
+- The service probes the configured 6100/7100 authentication candidates, then performs formal 6100
+  login with the verified embedded dictionary. Runtime state exposes only account, probe outcomes,
+  response roles/lengths, dictionary fingerprint, active-server count, selected 5188/7709 routes,
+  timestamps, and a sanitized error string.
+- This remains an explicitly triggered control. Startup authentication, automatic reconnect, and
+  automatic 5188 ingestion are intentionally absent until session ownership and follow-up packet
+  semantics are proven from fresh Windows evidence.
