@@ -155,6 +155,9 @@ Turn the current standalone authentication proof into a protocol-aligned Rust im
   login with the verified embedded dictionary. Runtime state exposes only account, probe outcomes,
   response roles/lengths, dictionary fingerprint, active-server count, selected 5188/7709 routes,
   timestamps, and a sanitized error string.
-- This remains an explicitly triggered control. Startup authentication, automatic reconnect, and
-  automatic 5188 ingestion are intentionally absent until session ownership and follow-up packet
-  semantics are proven from fresh Windows evidence.
+- The control is disabled by default; `NETZIP_AUTH_LOGIN_ENABLED=1` is required before any network
+  operation can be triggered. Startup authentication, automatic reconnect, and automatic 5188
+  ingestion are intentionally absent until session ownership and follow-up packet semantics are
+  proven from fresh Windows evidence.
+- A new attempt clears prior response, dictionary, server-count, and endpoint fields before entering
+  `running`, so a failed retry cannot present stale success state.

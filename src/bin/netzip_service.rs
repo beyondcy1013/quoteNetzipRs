@@ -42,6 +42,7 @@ static FULL_PUSH_LAST_PUBLISHED_AT: OnceLock<Mutex<BTreeMap<String, String>>> = 
 static NETZIP_RUST_TCP_CLIENTS: OnceLock<
     Mutex<BTreeMap<String, Arc<Mutex<Option<NetzipRustTcpClient>>>>>,
 > = OnceLock::new();
+const AUTH_LOGIN_ENABLED_ENV: &str = "NETZIP_AUTH_LOGIN_ENABLED";
 static NETZIP_RUST_PUBLISH_METRICS: OnceLock<Mutex<BTreeMap<String, GatewayPublishMetrics>>> =
     OnceLock::new();
 static NATIVE_PUSH_CODE_TABLE_LOOKUP: OnceLock<BTreeMap<String, Quote0547CodeTableInfo>> =
@@ -330,11 +331,13 @@ struct AppState {
 struct AuthRuntime {
     state: Mutex<AuthStatusResponse>,
     login_in_progress: Mutex<bool>,
+    login_control_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
 struct AuthStatusResponse {
     phase: String,
+    login_control_enabled: bool,
     account: String,
     password_source: String,
     probes: Vec<Auth7100ProbeResult>,
@@ -358,6 +361,9 @@ impl Default for AuthStatusResponse {
         let credentials = netzipapi_rust_demo::auth_credentials::load(None, None);
         Self {
             phase: "idle".to_string(),
+            login_control_enabled: auth_login_control_enabled_value(
+                std::env::var(AUTH_LOGIN_ENABLED_ENV).ok().as_deref(),
+            ),
             account: credentials.account,
             password_source: credentials.password_source.to_string(),
             probes: Vec::new(),
@@ -394,6 +400,43 @@ mod resident_auth_contract_tests {
         assert!(!encoded.contains("\"password\""));
         assert!(!encoded.contains("secret"));
         assert!(encoded.contains("password_source"));
+    }
+
+    #[test]
+    fn auth_login_control_requires_explicit_opt_in() {
+        assert!(!super::auth_login_control_enabled_value(None));
+        assert!(!super::auth_login_control_enabled_value(Some("0")));
+        assert!(!super::auth_login_control_enabled_value(Some("false")));
+        assert!(super::auth_login_control_enabled_value(Some("1")));
+        assert!(super::auth_login_control_enabled_value(Some("true")));
+    }
+
+    #[test]
+    fn starting_auth_attempt_clears_previous_protocol_state() {
+        let mut status = AuthStatusResponse::default();
+        status.phase = "succeeded".to_string();
+        status.response_roles = vec!["zstd_dictionary".to_string()];
+        status.response_packet_lengths = vec![443];
+        status.dictionary_length = Some(1000);
+        status.dictionary_sha256 = Some("fingerprint".to_string());
+        status.login_success_confirmed = true;
+        status.active_server_count = 10;
+        status.selected_quote_endpoint = Some("198.51.100.10:5188".to_string());
+        status.selected_7709_endpoint = Some("198.51.100.11:7709".to_string());
+
+        super::begin_auth_attempt(&mut status, 123);
+
+        assert_eq!(status.phase, "running");
+        assert!(status.response_roles.is_empty());
+        assert!(status.response_packet_lengths.is_empty());
+        assert_eq!(status.dictionary_length, None);
+        assert_eq!(status.dictionary_sha256, None);
+        assert!(!status.login_success_confirmed);
+        assert_eq!(status.active_server_count, 0);
+        assert_eq!(status.selected_quote_endpoint, None);
+        assert_eq!(status.selected_7709_endpoint, None);
+        assert_eq!(status.attempt_started_at, Some(123));
+        assert_eq!(status.completed_at, None);
     }
 }
 
@@ -1639,6 +1682,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         auth: Arc::new(AuthRuntime {
             state: Mutex::new(AuthStatusResponse::default()),
             login_in_progress: Mutex::new(false),
+            login_control_enabled: auth_login_control_enabled_value(
+                std::env::var(AUTH_LOGIN_ENABLED_ENV).ok().as_deref(),
+            ),
         }),
     };
 
@@ -1749,6 +1795,15 @@ async fn auth_status(State(state): State<AppState>) -> Json<AuthStatusResponse> 
 }
 
 async fn auth_login(State(state): State<AppState>) -> Result<Json<AuthLoginResponse>, ApiError> {
+    if !state.auth.login_control_enabled {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: format!(
+                "authentication control disabled; set {AUTH_LOGIN_ENABLED_ENV}=1 to enable"
+            ),
+        });
+    }
+
     {
         let mut running = state
             .auth
@@ -1771,16 +1826,7 @@ async fn auth_login(State(state): State<AppState>) -> Result<Json<AuthLoginRespo
             .state
             .lock()
             .unwrap_or_else(|err| err.into_inner());
-        status.phase = "running".to_string();
-        status.account = netzipapi_rust_demo::auth_credentials::load(None, None).account;
-        status.password_source = netzipapi_rust_demo::auth_credentials::load(None, None)
-            .password_source
-            .to_string();
-        status.probes.clear();
-        status.probe_errors.clear();
-        status.last_error = None;
-        status.attempt_started_at = Some(started);
-        status.completed_at = None;
+        begin_auth_attempt(&mut status, started);
     }
 
     let auth = state.auth.clone();
@@ -1857,6 +1903,36 @@ fn run_authentication()
     let login =
         login_auth_6100_with_verified_dictionary(&config).map_err(|error| error.to_string())?;
     Ok((probes, probe_errors, login))
+}
+
+fn begin_auth_attempt(status: &mut AuthStatusResponse, started: u64) {
+    let credentials = netzipapi_rust_demo::auth_credentials::load(None, None);
+    status.phase = "running".to_string();
+    status.account = credentials.account;
+    status.password_source = credentials.password_source.to_string();
+    status.probes.clear();
+    status.probe_errors.clear();
+    status.selected_auth_endpoint = None;
+    status.response_roles.clear();
+    status.response_packet_lengths.clear();
+    status.dictionary_length = None;
+    status.dictionary_sha256 = None;
+    status.login_success_confirmed = false;
+    status.active_server_count = 0;
+    status.selected_quote_endpoint = None;
+    status.selected_7709_endpoint = None;
+    status.last_error = None;
+    status.attempt_started_at = Some(started);
+    status.completed_at = None;
+}
+
+fn auth_login_control_enabled_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn apply_login_result(status: &mut AuthStatusResponse, login: Auth7100LoginResult) {

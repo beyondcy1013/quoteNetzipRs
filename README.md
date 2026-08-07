@@ -393,6 +393,8 @@ NETZIP_SERVICE_LISTEN=0.0.0.0:16893 cargo run --bin netzip_service
 
 - `GET /`
 - `GET /health`
+- `GET /api/auth/status`（只返回脱敏认证状态）
+- `POST /api/auth/login`（默认禁用；只有设置 `NETZIP_AUTH_LOGIN_ENABLED=1` 后才允许显式触发）
 - `GET /api/capabilities`
 - `GET /api/quotes?codes=SH600000,SZ000001`（仅作为 `quote-gateway` 的 Linux/Rust 上游行情接口）
 - `POST /api/hqw/publish`（将指定行情直接投递到 quote-gateway 现有 HQW 数据源）
@@ -430,6 +432,7 @@ NETZIP_SERVICE_LISTEN=0.0.0.0:16893 cargo run --bin netzip_service
 
 ```bash
 curl -fsS http://127.0.0.1:16893/health
+curl -fsS http://127.0.0.1:16893/api/auth/status
 curl -fsS http://127.0.0.1:16893/api/capabilities
 curl -fsS 'http://127.0.0.1:16893/api/quotes?codes=SH600000,SZ000001'
 curl -fsS -X POST http://127.0.0.1:16893/api/hqw/publish \

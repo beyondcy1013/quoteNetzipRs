@@ -1,5 +1,34 @@
 # NetzipRs Experience
 
+## 2026-08-07 09:07 +08:00 - Gate resident authentication control and clear stale status
+
+### Phenomenon And Root Cause
+
+The new resident `POST /api/auth/login` route was reachable on the service's default LAN
+`0.0.0.0` listener without an explicit enable switch. Any caller could therefore trigger another
+real-account login and potentially disrupt an existing vendor session. A failed retry also left
+the previous response roles, dictionary fingerprint, active-server count, and selected endpoints
+visible in the status object.
+
+### Change
+
+- Require `NETZIP_AUTH_LOGIN_ENABLED=1` (also accepting explicit `true/yes/on`) at service startup;
+  otherwise the endpoint returns `403` and performs no network operation.
+- Clear all attempt-specific protocol and route fields when a new attempt enters `running`, while
+  retaining only the current account/source metadata and timestamps.
+- Expose `login_control_enabled` in the sanitized status so operators can distinguish disabled
+  control from a missing password or a failed protocol attempt.
+- Add unit tests for explicit opt-in, stale-state clearing, and password-free status serialization.
+
+### Verification And Boundary
+
+- The resident-auth contract tests passed 3/3, and the complete `netzip_service` binary test suite
+  passed 45/45. No login endpoint was called and no credential was loaded for a network operation.
+- A loopback HTTP smoke test was not run because the local execution policy rejected the command's
+  mandatory background-process cleanup before startup; no service process was created.
+- The control remains manual and opt-in. Startup login, automatic reconnect, and automatic 5188
+  ingestion remain disabled pending dynamic follow-up and session-ownership evidence.
+
 ## 2026-08-07 08:37 +08:00 - Separate authentication success from 5188 and 7709 routing
 
 ### Phenomenon And Root Cause
