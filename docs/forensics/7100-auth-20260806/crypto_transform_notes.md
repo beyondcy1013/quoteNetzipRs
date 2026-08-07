@@ -5,6 +5,7 @@
 - `penc` 确实在 7100/6100 登录线上出现。
 - 标准 ZSTD 用于 7100 测速、7100 响应和 6100 正式登录请求。
 - `field44=12` 不是无法解释的伪 ZSTD：现场 `Stock.字典` 作为 raw-content dictionary 可解开本次全部 66 个样本。
+- C2/C3 客户端 follow-up 已定位唯一动态明文字段“编号”，并可用相同字典和 ZSTD level 3 逐字节重建基准帧。
 - `Tdx_Encrypt` 没有出现在本次网络字节中；现有证据只把它定位到 Stock.dll 的 7709 bootstrap 调用链。
 - `hypenc` 在本次原始 pcapng 中未出现。
 
@@ -36,6 +37,28 @@
 | inbound | 326 | 154 | 308 | 10464 / 9454936 | `8bec669b85f8065145604c44cdb2d65a101a00a68122bac5b020bc63260ae41c` |
 
 这修正了旧结论：阻塞点不再是“找不到字典”，而是 Rust 端需要对齐 raw dictionary 压缩参数、对象模板和动态字段，验证生成字节能被服务端接受。
+
+### 2.1 C2/C3 follow-up 动态边界（2026-08-07 离线复核）
+
+对仓库根目录 `dump_*.bin` / `spawn_dump_*.bin` 中 26 个 `field44=12` 样本做了离线复核。所有样本的 ZSTD magic 均位于外层偏移 `172`，均以相同 1000 B raw-content `Stock.字典` 解压成功，帧后均保留 2 B 外层尾部。
+
+| 组 | 样本数 | ZSTD 帧长度 | 解压长度 | 唯一明文变化 | 结论 |
+|---|---:|---:|---:|---|---|
+| 271 B C2 | 11 | 97 | 130 | `u32 LE @124`，其 UTF-16 标签“编号”位于 `@118` | 编号变化只导致压缩帧 `@67`、即外层 `@239` 的单字节变化 |
+| 333/334 B C3 | 11 | 159/160 | 430 | `u32 LE @116`，其 UTF-16 标签“编号”位于 `@110` | 同一明文模板因编号变化产生 159/160 B 两种合法 level-3 帧 |
+| 570 B | 4 | 396 | 844 | 无 | 压缩帧和解压体在 4 个样本间完全一致 |
+
+代表证据：
+
+| 文件 | 文件 SHA-256 | 解压 SHA-256 | 说明 |
+|---|---|---|---|
+| `spawn_dump_271_1774689981.bin` | `3391bfca794821a7e8e55281df82777c704bf27640b2afa9ecaf71695f9e0d96` | `d6bea4876ab16bb72b427483178818627cb14b1a7aba3fac7d0b33e5075bcf56` | C2 编号 1，Rust 基准模板 |
+| `spawn_dump_271_1774690063.bin` | `7210ced094355fe449a35ad7734035deb0bd218eaade8367c8e1435edd3be823` | `e4a91ff819940dc3b194eb811def789b24e7aa639f17ef28d267fc6b2c5a8a24` | C2 编号变化样本 |
+| `spawn_dump_333_1774689982.bin` | `3743bf4ad2a1600444c19430ba3ccda7839e56031788f9cec75f33fc1e30794b` | `e1fb8a1eb6fa8fcc63face48efc90398ac176b3a0a2bd532d502126df2463977` | C3 编号 2 |
+| `spawn_dump_334_1774690413.bin` | `f9f38eedb0b998f2fc654de6aaf49f46db5a0d8da018f91e3e72801b635ed695` | `d2c95daa7e5e0dde1982ac5837e0b33d573726fe4e6c41fbc846b8973204434d` | C3 编号变化后压缩长度增至 160 B |
+| `spawn_dump_570_1774690162.bin` | `78faff008901b73b11ab72edff20f2a7bb4ce52e62ba674dd11ef600997ee379` | `b31913c1d3c8f6aad3f8a7ef524e676841abc9e0cfa8757c97c9e19b94e0dd7f` | 570 B 稳定组代表 |
+
+Rust 端现由 `build_auth_7100_followup_download_packet(number)` 和 `build_auth_7100_followup_finish_packet(number)` 执行“模板解压 -> 修改编号 -> raw-content dictionary level 3 重压缩 -> 更新外层长度”。编号 `1/2` 的结果与原 C2/C3 常量逐字节相等；编号变化测试也能重新解压并读回编号。此次没有再次发起真实账号登录，因此服务端对非初始编号的接受性仍标记为未复验。
 
 ## 3. penc
 

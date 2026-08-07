@@ -22,6 +22,9 @@ const PROBE_INNER_SUFFIX_HEX: &str = "040000000600000000000000000000002600000006
 const PROBE_OUTER_PREFIX_HEX: &str = "517fdc7e05530000000000000000000000000000040000000000000000000000a3010000a301000002000000080000000000000000000000240000008b53297f00005a00530054004400000002000000040000000000000002000000200000007f95a65e0000f9000000000003000000040000000000000002000000220000009f537f95a65e0000b2010000000002000000f900000000000000090000001501000070656e630000";
 const FOLLOWUP_DOWNLOAD_HEX: &str = "517fdc7e055300000000000000000000000000000400000000000000000000000f0100000f010000020000000c0000000000000000000000280000008b53297f00005a00530054004400575b7851000002000000040000000000000002000000200000007f95a65e000061000000000003000000040000000000000002000000220000009f537f95a65e0000820000000000020000006100000000000000090000007d00000070656e63000028b52ffd2082c50200e4030b4e7d8f8765f64e000200821e3a00000000fb7cdf7e5c001a90be8fe14fa18068792e0069006e0069040300000020000000167ff75300000100000000000a00208baed9285913628b73600d24dfb4b6cb0cec6600390000";
 const FOLLOWUP_FINISH_HEX: &str = "517fdc7e055300000000000000000000000000000400000000000000000000004d0100004d010000020000000c0000000000000000000000280000008b53297f00005a00530054004400575b7851000002000000040000000000000002000000200000007f95a65e00009f000000000003000000040000000000000002000000220000009f537f95a65e0000ae0100000000020000009f0000000000000009000000bb00000070656e63000028b52ffd60ae00ad040052061722904d73b79f525cd366f054ffbf12df56d8766a58c6f8261fee2dcb64c91c211022538df171902c4209347827941969441bcff428ea4d9385ab1456a26ab8cbb963998472ab5e688723042d29312bb1d92be465e4e3df86031a6760160084139e9908e61e90149f9d6d020e24d5586e808118438d4e19d6336187822a1c00e44b5533628bfb7296b71b0dec8633b29a10400000";
+const FOLLOWUP_DOWNLOAD_NUMBER_OFFSET: usize = 124;
+const FOLLOWUP_FINISH_NUMBER_OFFSET: usize = 116;
+const FOLLOWUP_OUTER_TAIL_LEN: usize = 2;
 
 #[derive(Clone, Debug)]
 pub struct Auth7100ClientConfig {
@@ -139,12 +142,12 @@ fn login_auth_sequence(
     let first = read_netpacket(&mut stream)?;
 
     thread::sleep(Duration::from_millis(250));
-    stream.write_all(&decode_hex(FOLLOWUP_DOWNLOAD_HEX)?)?;
+    stream.write_all(&build_auth_7100_followup_download_packet(1)?)?;
     stream.flush()?;
     let second = read_netpacket(&mut stream)?;
 
     thread::sleep(Duration::from_millis(100));
-    stream.write_all(&decode_hex(FOLLOWUP_FINISH_HEX)?)?;
+    stream.write_all(&build_auth_7100_followup_finish_packet(2)?)?;
     stream.flush()?;
     let third = read_netpacket(&mut stream)?;
 
@@ -285,6 +288,72 @@ pub fn build_auth_7100_login_packet(
     )
 }
 
+/// Builds the dictionary-backed C2 download request with the supplied request number.
+///
+/// The template is decoded before the number is changed, then recompressed with the
+/// verified raw-content dictionary. This preserves the vendor's level-3 ZSTD output
+/// for the baseline number while allowing later request pairs to advance their number.
+pub fn build_auth_7100_followup_download_packet(
+    request_number: u32,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    build_dictionary_followup_packet(
+        FOLLOWUP_DOWNLOAD_HEX,
+        FOLLOWUP_DOWNLOAD_NUMBER_OFFSET,
+        request_number,
+    )
+}
+
+/// Builds the dictionary-backed C3 `Tdx_Encrypt` request with the supplied request number.
+pub fn build_auth_7100_followup_finish_packet(
+    request_number: u32,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    build_dictionary_followup_packet(
+        FOLLOWUP_FINISH_HEX,
+        FOLLOWUP_FINISH_NUMBER_OFFSET,
+        request_number,
+    )
+}
+
+fn build_dictionary_followup_packet(
+    template_hex: &str,
+    number_offset: usize,
+    request_number: u32,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let template = decode_hex(template_hex)?;
+    let mut decoded = decode_dictionary_response(&template, STOCK_DICTIONARY_BYTES)?;
+    patch_u32(&mut decoded, number_offset, request_number as usize)?;
+
+    let mut compressor = zstd::bulk::Compressor::with_dictionary(3, STOCK_DICTIONARY_BYTES)?;
+    let compressed = compressor.compress(&decoded)?;
+    let magic = template
+        .windows(4)
+        .position(|window| window == [0x28, 0xb5, 0x2f, 0xfd])
+        .ok_or("follow-up template contains no ZSTD frame")?;
+    if template.len() < magic + FOLLOWUP_OUTER_TAIL_LEN {
+        return Err("follow-up template is shorter than its outer tail".into());
+    }
+    let tail_start = template.len() - FOLLOWUP_OUTER_TAIL_LEN;
+    let tail = &template[tail_start..];
+    if tail != [0, 0] {
+        return Err("follow-up template has an unexpected outer tail".into());
+    }
+
+    let packet_len = magic
+        .checked_add(compressed.len())
+        .and_then(|value| value.checked_add(tail.len()))
+        .ok_or("follow-up packet length overflow")?;
+    let mut packet = template[..magic].to_vec();
+    patch_u32(&mut packet, 32, packet_len)?;
+    patch_u32(&mut packet, 36, packet_len)?;
+    patch_u32(&mut packet, 106, compressed.len())?;
+    patch_u32(&mut packet, 140, decoded.len())?;
+    patch_u32(&mut packet, 150, compressed.len())?;
+    patch_u32(&mut packet, 162, compressed.len() + 28)?;
+    packet.extend_from_slice(&compressed);
+    packet.extend_from_slice(tail);
+    Ok(packet)
+}
+
 fn build_auth_packet(
     account: &str,
     password: &str,
@@ -403,6 +472,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::{
+        build_auth_7100_followup_download_packet, build_auth_7100_followup_finish_packet,
         build_auth_7100_login_packet, build_auth_7100_probe_packet, classify_response,
         decode_dictionary_response, decode_hex, select_server_endpoint,
     };
@@ -448,6 +518,48 @@ mod tests {
         );
         assert!(contains_utf16(&inner, "1522"));
         assert!(contains_utf16(&inner, "fixture-secret"));
+    }
+
+    #[test]
+    fn rebuilds_the_captured_followup_templates_byte_for_byte() {
+        let download_template = decode_hex(super::FOLLOWUP_DOWNLOAD_HEX).expect("download");
+        let finish_template = decode_hex(super::FOLLOWUP_FINISH_HEX).expect("finish");
+
+        assert_eq!(
+            build_auth_7100_followup_download_packet(1).expect("download packet"),
+            download_template
+        );
+        assert_eq!(
+            build_auth_7100_followup_finish_packet(2).expect("finish packet"),
+            finish_template
+        );
+    }
+
+    #[test]
+    fn advances_followup_number_without_exposing_template_payload() {
+        let download = build_auth_7100_followup_download_packet(3).expect("download packet");
+        let download_decoded =
+            decode_dictionary_response(&download, super::STOCK_DICTIONARY_BYTES).expect("decode");
+        assert_eq!(
+            u32::from_le_bytes(download_decoded[124..128].try_into().unwrap()),
+            3
+        );
+        assert_eq!(
+            u32::from_le_bytes(download[32..36].try_into().unwrap()) as usize,
+            download.len()
+        );
+
+        let finish = build_auth_7100_followup_finish_packet(4).expect("finish packet");
+        let finish_decoded =
+            decode_dictionary_response(&finish, super::STOCK_DICTIONARY_BYTES).expect("decode");
+        assert_eq!(
+            u32::from_le_bytes(finish_decoded[116..120].try_into().unwrap()),
+            4
+        );
+        assert_eq!(
+            u32::from_le_bytes(finish[32..36].try_into().unwrap()) as usize,
+            finish.len()
+        );
     }
 
     #[test]

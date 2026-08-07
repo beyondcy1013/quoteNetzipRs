@@ -120,17 +120,35 @@ Turn the current standalone authentication proof into a protocol-aligned Rust im
   account session.
 - Focused parser/authentication tests pass; the full library has 95 passing tests and one known
   Windows-only infrastructure failure because `tcpdump` is unavailable.
-- The retained follow-up request templates remain evidence samples rather than a proven portable
-  dynamic generator. Their decoded roles match the fresh account-1522 flow, but the current
-  271-byte template differs from the fresh 267-byte evidence sample.
+- The retained follow-up request templates are now offline-reproducible dynamic generators. Across
+  26 local `field44=12` samples, C2 changes only decoded `u32 LE @124` and C3 changes only decoded
+  `u32 LE @116`; both fields are labeled `编号`. Raw-content dictionary compression at level 3
+  reproduces the baseline C2/C3 bytes exactly and updates all outer lengths when C3 becomes 334 B.
+- The current 271-byte template still differs in total length from the fresh 267-byte capture, so
+  the dynamic generator is proven against the retained local sample family, not yet against a new
+  live server session.
 
 ### Current Readiness Decision
 
 - Sufficient now: 6100/7100 probing, formal 6100 login packet construction, response-role
   validation, raw-content dictionary decoding, and three-/four-field 5188 list extraction.
-- Still unproven: byte-portable dynamic follow-up construction, 6100 session-field semantics,
-  `Tdx_Encrypt` participation in 7709 bootstrap, long-lived reconnect/failover behavior, and
-  equivalence with the production 7709/0547 session chain.
+- Still unproven: live-server acceptance of dynamically advanced follow-up numbers, the 267 B fresh
+  variant's remaining four-byte difference, 6100 session-field semantics, `Tdx_Encrypt`
+  participation in 7709 bootstrap, long-lived reconnect/failover behavior, and equivalence with
+  the production 7709/0547 session chain.
+
+## 2026-08-07 Dynamic Follow-Up Construction
+
+- `src/auth_7100_client.rs` now builds C2 and C3 from decoded templates instead of replaying opaque
+  compressed constants directly. The login flow uses request numbers 1 and 2, preserving the
+  previously accepted wire bytes.
+- The builder patches only the decoded `编号` field, compresses with the verified embedded
+  `Stock.字典` at level 3, and updates packet length, compressed length, decoded length, and outer
+  object-span length fields.
+- Focused authentication tests pass 10/10, including byte-for-byte baseline equality and advanced
+  number round trips. No credential was loaded and no network login was attempted.
+- This closes the offline dynamic C2/C3 construction gap. It does not close the live 267 B variant,
+  reconnect/failover policy, or 7709 `Tdx_Encrypt` equivalence gaps.
 
 ## 2026-08-07 Route-State Refinement
 

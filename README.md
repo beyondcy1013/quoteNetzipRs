@@ -189,7 +189,9 @@ NETZIP_TDX_ACCOUNT=1522 NETZIP_TDX_PASSWORD='<runtime-secret>' \
    - 这些项重要，但不该阻塞“先交付可用 Rust 行情软件”：
      - `hypenc` 的精确定义
      - 本地 `2000` 第二个/后续 `penc` 的 payload 内语义
-     - `7100` 登录后 `Tdx_Encrypt / penc / ZSTD字典` 的完整可逆链
+     - `Tdx_Encrypt` 参与 7709 bootstrap 的完整可逆链
+     - `6100` C2/C3 的 `penc / ZSTD字典` 编号链已可离线重建，但新鲜 267 B 变体和服务端
+       对递增编号的接受性仍需一次隔离会话复验
    - 它们影响的是：
      - 是否要无 DLL 纯 Rust 直连上游
      - 是否要做字节级兼容旧本地桥

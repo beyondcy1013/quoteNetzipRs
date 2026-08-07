@@ -1,5 +1,36 @@
 # NetzipRs Experience
 
+## 2026-08-07 10:35 +08:00 - Rebuild 6100 follow-up requests from their decoded number
+
+### Phenomenon And Root Cause
+
+The formal login path replayed captured 271-byte and 333-byte follow-up packets. Offline decoding
+showed that they were not opaque session ciphertext: all 26 retained `field44=12` samples decode
+with the verified raw-content `Stock.字典`. Within each request family, the only decoded change is a
+little-endian `编号` value at offset 124 for C2 and offset 116 for C3. Patching compressed bytes
+directly was unsafe because a C3 number change can alter most compressed bytes and change the frame
+length from 159 to 160 bytes.
+
+### Change
+
+- Decode the retained C2/C3 template, patch only its request number, and recompress with the
+  verified dictionary at ZSTD level 3.
+- Recalculate packet length, compressed length, decoded length, and object-span length in the
+  follow-up outer envelope.
+- Keep initial numbers 1 and 2 in the login flow so its wire bytes remain identical to the accepted
+  captured baseline; expose builders that can generate later numbers.
+
+### Verification And Boundary
+
+- `auth_7100_client::tests`: 10 passed, including byte-for-byte equality with both captured
+  templates and decoded round trips for advanced numbers.
+- Representative sample hashes and varying offsets are recorded in
+  `docs/forensics/7100-auth-20260806/crypto_transform_notes.md`.
+- No credential was loaded, no login was attempted, and no production process or service changed.
+- Dynamic construction is proven offline for the retained 271/333/334-byte family. The fresh
+  267-byte variant, live acceptance of advanced numbers, reconnect/failover, and 7709
+  `Tdx_Encrypt` equivalence remain open.
+
 ## 2026-08-07 09:07 +08:00 - Gate resident authentication control and clear stale status
 
 ### Phenomenon And Root Cause
