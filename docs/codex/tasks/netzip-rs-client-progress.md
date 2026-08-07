@@ -33,7 +33,10 @@ business behavior have equivalent evidence.
   not cancel its `spawn_blocking` readers: a rapid full-push service restart briefly created two
   independent 53-shard sessions. The resident endpoint now holds an atomic worker-owned lease and
   rejects overlapping full-push requests with HTTP 409 until the original worker actually exits.
-  Acceptance still requires observing the deployed change during trading.
+  Deployment `095434-18c8f2f31ead11e3` proved the lease under the real systemd double-start: the
+  second caller received 409 until the orphaned worker exited, then the managed script completed a
+  257-second session with `fd=76`, NetzipRs-owned `CLOSE-WAIT=0`, no open-file or ACK errors, five
+  reader failures and five recoveries, zero main/BJ publish failures, and zero TCP fallbacks.
 
 ## Open Problems
 
@@ -86,9 +89,10 @@ contracts still require controlled Windows validation.
 - [x] Workspace tests and the authentication CLI build pass through webClx.
 - [x] Gateway TCP cache is bounded by lane and address, with a cross-thread regression test.
 - [x] Fixed binary is deployed under `/home/bin/netzip/` and both Rust services are active.
-- [ ] A complete trading session keeps fd and `CLOSE-WAIT` counts bounded.
-- [ ] Shanghai/Shenzhen readers show stable recovery and no descriptor-related failures.
-- [ ] Beijing polling and gateway ACK publication remain healthy throughout the same session.
+- [x] A complete trading session keeps fd and `CLOSE-WAIT` counts bounded.
+- [x] Shanghai/Shenzhen readers recover transient session-start failures without descriptor-related
+  failures.
+- [x] Beijing polling and gateway ACK publication remain healthy throughout the same session.
 - [ ] Resident 7100 authentication and reconnect state are visible through service status.
 - [ ] Long-lived Wine/Rust account overlap is either proven safe or replaced by an explicit ownership
   policy.
