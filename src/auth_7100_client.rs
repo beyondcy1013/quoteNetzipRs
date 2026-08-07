@@ -55,6 +55,7 @@ pub struct Auth7100LoginResult {
     pub login_success_confirmed: bool,
     pub quote_servers: Vec<DownloadedServerEntry>,
     pub selected_quote_endpoint: Option<String>,
+    pub selected_7709_endpoint: Option<String>,
 }
 
 pub fn login_auth_7100(
@@ -150,37 +151,36 @@ fn login_auth_sequence(
         return Err(format!("unexpected authentication login response sequence: {roles:?}").into());
     }
 
-    let (decoded_response_lengths, login_success_confirmed, quote_servers, selected_quote_endpoint) =
-        if let Some(dictionary) = dictionary {
-            let first_decoded = decode_dictionary_response(&first, dictionary)?;
-            let third_decoded = decode_dictionary_response(&third, dictionary)?;
-            let quote_servers = parse_server_entries_from_packet_bytes(&second)?;
-            let selected_quote_endpoint = quote_servers.iter().find_map(|entry| {
-                if entry.main_port == 5188 {
-                    Some(format!("{}:{}", entry.host, entry.main_port))
-                } else if entry.secondary_port == 5188 {
-                    Some(format!("{}:{}", entry.host, entry.secondary_port))
-                } else {
-                    None
-                }
-            });
-            let login_success_confirmed = contains_utf16(&first_decoded, "登录成功")
-                || contains_utf16(&third_decoded, "登录成功");
-            if !login_success_confirmed {
-                return Err("decoded authentication response did not contain 登录成功".into());
-            }
-            if selected_quote_endpoint.is_none() {
-                return Err("decoded download response contained no 5188 quote endpoint".into());
-            }
-            (
-                vec![first_decoded.len(), third_decoded.len()],
-                login_success_confirmed,
-                quote_servers,
-                selected_quote_endpoint,
-            )
-        } else {
-            (Vec::new(), false, Vec::new(), None)
-        };
+    let (
+        decoded_response_lengths,
+        login_success_confirmed,
+        quote_servers,
+        selected_quote_endpoint,
+        selected_7709_endpoint,
+    ) = if let Some(dictionary) = dictionary {
+        let first_decoded = decode_dictionary_response(&first, dictionary)?;
+        let third_decoded = decode_dictionary_response(&third, dictionary)?;
+        let quote_servers = parse_server_entries_from_packet_bytes(&second)?;
+        if quote_servers.is_empty() {
+            return Err("decoded download response contained no active server entries".into());
+        }
+        let selected_quote_endpoint = select_server_endpoint(&quote_servers, 5188);
+        let selected_7709_endpoint = select_server_endpoint(&quote_servers, 7709);
+        let login_success_confirmed = contains_utf16(&first_decoded, "登录成功")
+            || contains_utf16(&third_decoded, "登录成功");
+        if !login_success_confirmed {
+            return Err("decoded authentication response did not contain 登录成功".into());
+        }
+        (
+            vec![first_decoded.len(), third_decoded.len()],
+            login_success_confirmed,
+            quote_servers,
+            selected_quote_endpoint,
+            selected_7709_endpoint,
+        )
+    } else {
+        (Vec::new(), false, Vec::new(), None, None)
+    };
 
     Ok(Auth7100LoginResult {
         endpoint,
@@ -195,7 +195,28 @@ fn login_auth_sequence(
         login_success_confirmed,
         quote_servers,
         selected_quote_endpoint,
+        selected_7709_endpoint,
     })
+}
+
+fn select_server_endpoint(entries: &[DownloadedServerEntry], port: u16) -> Option<String> {
+    entries.iter().find_map(|entry| {
+        if entry.main_port == port {
+            Some(format_endpoint(&entry.host, entry.main_port))
+        } else if entry.secondary_port == port {
+            Some(format_endpoint(&entry.host, entry.secondary_port))
+        } else {
+            None
+        }
+    })
+}
+
+fn format_endpoint(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 fn validate_stock_dictionary(dictionary: &[u8]) -> Result<String, Box<dyn Error>> {
@@ -376,8 +397,9 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, Box<dyn Error>> {
 mod tests {
     use super::{
         build_auth_7100_login_packet, build_auth_7100_probe_packet, classify_response,
-        decode_dictionary_response, decode_hex,
+        decode_dictionary_response, decode_hex, select_server_endpoint,
     };
+    use crate::auth_download::{DownloadedServerEntry, load_downloaded_server_config_sample};
     use std::io::{Cursor, Write};
 
     #[test]
@@ -469,6 +491,62 @@ mod tests {
         response[44..48].copy_from_slice(&8u32.to_le_bytes());
         response[60..74].copy_from_slice(&utf16_tail("压缩ZSTD"));
         assert_eq!(classify_response(&response).unwrap(), "auth_probe_response");
+    }
+
+    #[test]
+    fn selects_5188_and_7709_routes_without_treating_either_as_authentication() {
+        let entries = vec![
+            DownloadedServerEntry {
+                group_name: None,
+                name: "quote".to_string(),
+                host: "198.51.100.10".to_string(),
+                main_port: 5188,
+                secondary_port: 5188,
+                enabled: true,
+            },
+            DownloadedServerEntry {
+                group_name: None,
+                name: "bootstrap".to_string(),
+                host: "198.51.100.11".to_string(),
+                main_port: 7709,
+                secondary_port: 7709,
+                enabled: true,
+            },
+        ];
+
+        assert_eq!(
+            select_server_endpoint(&entries, 5188).as_deref(),
+            Some("198.51.100.10:5188")
+        );
+        assert_eq!(
+            select_server_endpoint(&entries, 7709).as_deref(),
+            Some("198.51.100.11:7709")
+        );
+        assert_eq!(select_server_endpoint(&entries, 14017), None);
+
+        let ipv6_entry = DownloadedServerEntry {
+            group_name: None,
+            name: "ipv6".to_string(),
+            host: "2001:db8::1".to_string(),
+            main_port: 7709,
+            secondary_port: 7709,
+            enabled: true,
+        };
+        assert_eq!(
+            select_server_endpoint(&[ipv6_entry], 7709).as_deref(),
+            Some("[2001:db8::1]:7709")
+        );
+    }
+
+    #[test]
+    fn accepts_the_download_sample_as_a_7709_only_route_set() {
+        let config = load_downloaded_server_config_sample().expect("download sample");
+        assert_eq!(select_server_endpoint(&config.active_servers, 5188), None);
+        assert!(
+            select_server_endpoint(&config.active_servers, 7709)
+                .expect("7709 route")
+                .ends_with(":7709")
+        );
     }
 
     fn contains_utf16(bytes: &[u8], value: &str) -> bool {

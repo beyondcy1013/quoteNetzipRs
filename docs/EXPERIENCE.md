@@ -1,5 +1,39 @@
 # NetzipRs Experience
 
+## 2026-08-07 08:37 +08:00 - Separate authentication success from 5188 and 7709 routing
+
+### Phenomenon And Root Cause
+
+The formal 6100 login path treated a missing 5188 endpoint as authentication failure even after
+the response-role sequence and decoded `登录成功` marker had succeeded. This was too strong: the
+fresh account-1522 response supplied 5188 routing, but the tracked historical download response
+contains 10 active 7709 entries and no 5188. Authentication status and downstream server selection
+are separate protocol facts.
+
+The repository also contains 280-byte `plain_0118.bin` and `cipher_0118.bin` baseline files, but
+they are not a trustworthy `Tdx_Encrypt` pair. Their capture scripts overwrite fixed filenames
+without an event ID, the files were imported in the initial repository baseline, and neither file
+matches the tracked 7709 TCP streams. Fixed-XOR and independent 8-byte-block checks also failed.
+
+### Change
+
+- Require a decoded success marker and at least one active downloaded server entry, not a fixed
+  5188 port, for the narrow authenticated result.
+- Preserve `selected_quote_endpoint` as the optional 5188 route and add
+  `selected_7709_endpoint` as independent bootstrap state.
+- Format IPv6 endpoint candidates with brackets while retaining existing IPv4 output.
+- Add regression coverage for mixed 5188/7709 routing and the tracked 7709-only download sample.
+- Do not implement or infer `Tdx_Encrypt` from the uncorrelated 0x118 files.
+
+### Verification And Boundary
+
+- `auth_7100_client::tests`: 8 passed; `auth_download::tests`: 5 passed.
+- Full library binary: 97 passed and 1 failed. The only failure remains the Windows environment's
+  missing `tcpdump` for pcapng conversion.
+- No network login, hook, process injection, or production modification occurred.
+- This saves the correct post-login route state but still does not generate the dynamic 7709
+  bootstrap, prove a `Tdx_Encrypt` algorithm, or validate reconnect/failover behavior.
+
 ## 2026-08-07 06:35 +08:00 - Accept single-port 5188 entries after authenticated 6100 login
 
 ### Phenomenon And Root Cause

@@ -131,3 +131,17 @@ Turn the current standalone authentication proof into a protocol-aligned Rust im
 - Still unproven: byte-portable dynamic follow-up construction, 6100 session-field semantics,
   `Tdx_Encrypt` participation in 7709 bootstrap, long-lived reconnect/failover behavior, and
   equivalence with the production 7709/0547 session chain.
+
+## 2026-08-07 Route-State Refinement
+
+- Authentication success is now independent from a particular downstream quote port. A decoded
+  `登录成功` marker plus a non-empty active server list confirms the narrow login result.
+- `selected_quote_endpoint` continues to expose an optional 5188 route, while the result now also
+  exposes `selected_7709_endpoint` for an independently managed 7709 bootstrap path.
+- This distinction is required by repository evidence: the fresh account-1522 run selected 5188,
+  while the tracked historical download response contains 10 active 7709 endpoints and no 5188.
+- Offline tests cover a mixed 5188/7709 list and the tracked 7709-only download response. No new
+  account login or production-process interaction was performed.
+- The baseline `plain_0118.bin` / `cipher_0118.bin` files are not accepted as a proven
+  `Tdx_Encrypt` pair. They predate the current task, do not match the tracked 7709 TCP streams, and
+  the capture scripts overwrite uncorrelated events under fixed filenames.
