@@ -1,6 +1,6 @@
 # NetzipRs Market Client Progress
 
-Updated: 2026-08-06
+Updated: 2026-08-07
 
 ## Objective
 
@@ -24,6 +24,12 @@ business behavior have equivalent evidence.
 - Commit `28ea978` replaced thread-keyed gateway TCP client slots with bounded lane/address slots.
   The deployment replaced the leaked process, and immediate checks remained at `fd=7` and
   `CLOSE-WAIT=0`.
+- The 2026-08-07 morning session kept NetzipRs near 68 file descriptors with no persistent
+  NetzipRs-owned `CLOSE-WAIT`, no `Too many open files`, and zero main/BJ TCP publish or ACK
+  failures. Session-boundary evidence showed 53 shards reconnecting together: eight initial quote
+  requests lacked a decodable 0547 frame at 09:42:11, and five bootstraps received only two of three
+  frames at 09:46:21. Native shard startup and retries are now deterministically staggered to remove
+  that reconnect burst; acceptance still requires observing the deployed change during trading.
 
 ## Open Problems
 

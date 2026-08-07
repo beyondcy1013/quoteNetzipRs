@@ -6486,6 +6486,17 @@ fn build_bj_poll_plan(symbols: &[String], interval: Duration) -> Result<BjPollPl
     })
 }
 
+fn native_push_shard_initial_delay(shard: usize) -> Duration {
+    Duration::from_millis((shard as u64).saturating_mul(75))
+}
+
+fn native_push_shard_retry_delay(shard: usize, consecutive_failures: usize) -> Duration {
+    let jitter_ms = ((shard as u64).saturating_mul(37)
+        + (consecutive_failures as u64).saturating_mul(53))
+        % 500;
+    Duration::from_millis(750 + jitter_ms)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn execute_bj_poll_loop(
     plan: &BjPollPlan,
@@ -6733,6 +6744,11 @@ fn execute_hqw_push_worklist(
                         token: 0,
                     })
                     .collect::<Vec<_>>();
+                std::thread::sleep(
+                    native_push_shard_initial_delay(shard)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+                let mut consecutive_failures = 0usize;
                 while Instant::now() < deadline {
                     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                         let session_started_at = Instant::now();
@@ -6812,15 +6828,18 @@ fn execute_hqw_push_worklist(
                         Ok(())
                     })();
                     if let Err(error) = result {
+                        consecutive_failures = consecutive_failures.saturating_add(1);
+                        let retry_delay = native_push_shard_retry_delay(shard, consecutive_failures)
+                            .min(deadline.saturating_duration_since(Instant::now()));
                         let _ = sender.send(NativePushReaderMessage::Failed {
                             shard,
-                            error: error.to_string(),
+                            error: format!(
+                                "{error}; symbols={}; consecutive_failures={consecutive_failures}; retry_ms={}",
+                                request_items.len(),
+                                retry_delay.as_millis()
+                            ),
                         });
-                        std::thread::sleep(
-                            deadline
-                                .saturating_duration_since(Instant::now())
-                                .min(Duration::from_secs(1)),
-                        );
+                        std::thread::sleep(retry_delay);
                     }
                 }
             });
@@ -7771,6 +7790,7 @@ mod tests {
         compact_quotes_response_from_result, filter_auth_7100_flow_matrix,
         filter_auth_7100_shell_correlation, infer_live_quote_market, infer_name_keyword_tag,
         infer_name_keyword_tags, linux_native_endpoints, linux_phase_skipped,
+        native_push_shard_initial_delay, native_push_shard_retry_delay,
         normalize_live_quote_symbol, parse_compact_quote_codes, parse_gateway_worklist,
         partition_hqw_quotes, post_quote_gateway_batch_with_tcp, pure_rust_linux_hard_blockers,
         quote_0547_pattern_subbucket, quote_0547_quote_head_state_label,
@@ -7790,6 +7810,27 @@ mod tests {
         assert_eq!(validated_full_push_worker_count(4, 0).unwrap(), 0);
         assert!(validated_full_push_worker_count(0, 58).is_err());
         assert!(validated_full_push_worker_count(17, 58).is_err());
+    }
+
+    #[test]
+    fn native_push_shards_stagger_initial_connections_and_retries() {
+        assert_eq!(
+            native_push_shard_initial_delay(0),
+            std::time::Duration::ZERO
+        );
+        assert_eq!(
+            native_push_shard_initial_delay(52),
+            std::time::Duration::from_millis(3_900)
+        );
+
+        let shard_zero = native_push_shard_retry_delay(0, 1);
+        let shard_one = native_push_shard_retry_delay(1, 1);
+        assert_ne!(shard_zero, shard_one);
+        for shard in 0..53 {
+            let delay = native_push_shard_retry_delay(shard, 3);
+            assert!(delay >= std::time::Duration::from_millis(750));
+            assert!(delay < std::time::Duration::from_millis(1_250));
+        }
     }
 
     #[test]
