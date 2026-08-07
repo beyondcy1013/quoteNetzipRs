@@ -29,7 +29,11 @@ business behavior have equivalent evidence.
   failures. Session-boundary evidence showed 53 shards reconnecting together: eight initial quote
   requests lacked a decodable 0547 frame at 09:42:11, and five bootstraps received only two of three
   frames at 09:46:21. Native shard startup and retries are now deterministically staggered to remove
-  that reconnect burst; acceptance still requires observing the deployed change during trading.
+  that reconnect burst. The first deployment also proved that cancelling the systemd-owned curl did
+  not cancel its `spawn_blocking` readers: a rapid full-push service restart briefly created two
+  independent 53-shard sessions. The resident endpoint now holds an atomic worker-owned lease and
+  rejects overlapping full-push requests with HTTP 409 until the original worker actually exits.
+  Acceptance still requires observing the deployed change during trading.
 
 ## Open Problems
 

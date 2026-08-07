@@ -34,6 +34,7 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -326,6 +327,26 @@ struct AppState {
     service_name: &'static str,
     version: &'static str,
     auth: Arc<AuthRuntime>,
+    full_push_in_progress: Arc<AtomicBool>,
+}
+
+struct FullPushLease {
+    in_progress: Arc<AtomicBool>,
+}
+
+impl Drop for FullPushLease {
+    fn drop(&mut self) {
+        self.in_progress.store(false, Ordering::Release);
+    }
+}
+
+fn try_acquire_full_push(in_progress: &Arc<AtomicBool>) -> Option<FullPushLease> {
+    in_progress
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .ok()
+        .map(|_| FullPushLease {
+            in_progress: Arc::clone(in_progress),
+        })
 }
 
 struct AuthRuntime {
@@ -1686,6 +1707,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 std::env::var(AUTH_LOGIN_ENABLED_ENV).ok().as_deref(),
             ),
         }),
+        full_push_in_progress: Arc::new(AtomicBool::new(false)),
     };
 
     let app = Router::new()
@@ -3568,6 +3590,7 @@ async fn hqw_publish_worklist(
 }
 
 async fn hqw_push_worklist(
+    State(state): State<AppState>,
     Json(request): Json<HqwPushWorklistRequest>,
 ) -> Result<Json<HqwPushWorklistResponse>, ApiError> {
     let duration_secs = request.duration_secs.unwrap_or(240);
@@ -3597,7 +3620,12 @@ async fn hqw_push_worklist(
     let gateway_addr = std::env::var("NETZIP_QUOTE_GATEWAY_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:16886".to_string());
     let current_token = std::env::var("NETZIP_QUOTE_GATEWAY_NETZIP_RUST_7709_TOKEN").ok();
+    let lease = try_acquire_full_push(&state.full_push_in_progress).ok_or_else(|| ApiError {
+        status: StatusCode::CONFLICT,
+        message: "native full-push session already running".to_string(),
+    })?;
     let response = tokio::task::spawn_blocking(move || {
+        let _lease = lease;
         execute_hqw_push_worklist(
             gateway_addr,
             current_token,
@@ -7800,7 +7828,7 @@ mod tests {
         return_full_push_session, select_new_full_push_quotes, shard_full_push_batches,
         split_full_push_batches, split_full_push_upstreams, stable_endpoints,
         take_full_push_session, tdx_0547_public_time_hhmmss, top_scoped_source_groups,
-        validated_full_push_worker_count,
+        try_acquire_full_push, validated_full_push_worker_count,
     };
 
     #[test]
@@ -7831,6 +7859,16 @@ mod tests {
             assert!(delay >= std::time::Duration::from_millis(750));
             assert!(delay < std::time::Duration::from_millis(1_250));
         }
+    }
+
+    #[test]
+    fn native_full_push_lease_rejects_overlap_until_worker_finishes() {
+        let in_progress = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lease = try_acquire_full_push(&in_progress).expect("first session lease");
+        assert!(try_acquire_full_push(&in_progress).is_none());
+
+        drop(lease);
+        assert!(try_acquire_full_push(&in_progress).is_some());
     }
 
     #[test]
