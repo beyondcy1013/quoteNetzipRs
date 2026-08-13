@@ -1,6 +1,6 @@
 # NetzipRs Market Client Progress
 
-Updated: 2026-08-07
+Updated: 2026-08-13
 
 ## Objective
 
@@ -37,16 +37,27 @@ business behavior have equivalent evidence.
   second caller received 409 until the orphaned worker exited, then the managed script completed a
   257-second session with `fd=76`, NetzipRs-owned `CLOSE-WAIT=0`, no open-file or ACK errors, five
   reader failures and five recoveries, zero main/BJ publish failures, and zero TCP fallbacks.
+- The final 2026-08-13 live deployment moved gateway ACK before downstream broadcast, applied the
+  configured TCP ACK timeout to persistent clients, expanded the runner budget to 330 seconds, and
+  stopped the current full-push unit before restarting the main service. Two consecutive sessions
+  completed in 263.894s and 271.610s with zero ACK errors, sequence mismatches, HTTP fallbacks,
+  HTTP 409 responses, publish failures, or reader failures. Main/BJ/manual TCP metrics were
+  2,934/2,934, 321/321, and 673/673 cumulatively after the second session. One audit failure was
+  counted without interrupting publication and still needs detailed cause instrumentation.
+- The same live run separated the remaining bottleneck from Netzip transport: quoteGateway's
+  5,543-code merged WebSocket client reached 116.4s p99 event age with 3ms socket-send p99, while a
+  177-code native client stayed at 3.74s p99. The gateway report is
+  `/home/codes/quoteGateway/docs/history/2026-08-13-open-market-push-profile.md`.
 
 ## Open Problems
 
-### P0: Verify the TCP cache fix under trading load
+### Completed: Verify the TCP cache and ACK fixes under trading load
 
 The previous process reached its 1024-descriptor soft limit with approximately 922 `CLOSE-WAIT`
-sockets, causing push shards, Beijing polling, quoteGateway publication, and ACK handling to fail.
-The code-level cause is fixed and covered by a cross-thread regression test, but the new process was
-deployed after the trading window. Acceptance still requires a live session showing bounded fd and
-socket counts with no new `Too many open files` errors.
+sockets. The live 2026-08-13 acceptance retained three established gateway TCP client connections,
+zero publisher-owned `CLOSE-WAIT`, bounded descriptors, and zero ACK/transport failures across two
+complete sessions. The remaining gateway CPU, WebSocket lag, and allocator retention are downstream
+gateway concerns rather than an unresolved Netzip TCP cache failure.
 
 ### P1: Integrate native 7100 authentication into the resident service
 
