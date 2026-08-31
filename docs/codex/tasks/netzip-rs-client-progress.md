@@ -1,6 +1,6 @@
 # NetzipRs Market Client Progress
 
-Updated: 2026-08-13
+Updated: 2026-08-31
 
 ## Objective
 
@@ -13,6 +13,9 @@ business behavior have equivalent evidence.
 
 - The native `7709` route supports code-table synchronization, live quotes, K-line, F10, FIN, and
   `0547` parsing.
+- Historical supplementation is now separated into the shared `netzip-supplement` business crate.
+  `POST /api/supplement/kline` exposes Wine-configured daily, five-minute, and one-minute defaults
+  over paged `0x052d` requests with dedupe, throttling, and per-item partial-failure status.
 - `netzip_linux` and the local HTTP service expose the Linux-first snapshot and focused query paths.
 - Full-market Shanghai/Shenzhen push and the lightweight Beijing polling lane publish into
   quoteGateway through `netzip-rs-full-push.service`.
@@ -47,7 +50,23 @@ business behavior have equivalent evidence.
 - The same live run separated the remaining bottleneck from Netzip transport: quoteGateway's
   5,543-code merged WebSocket client reached 116.4s p99 event age with 3ms socket-send p99, while a
   177-code native client stayed at 3.74s p99. The gateway report is
-  `/home/codes/quoteGateway/docs/history/2026-08-13-open-market-push-profile.md`.
+  `/home/codes/stock/quoteTdx/docs/history/2026-08-13-open-market-push-profile.md`.
+- The 2026-08-31 native-push deployment raised the default worker ceiling and converged it to the
+  53 subscription shards. A normal five-endpoint session completed in 278.780s with
+  `endpoint_pool_size=5`, `endpoint_failovers=0`, `worker_count=53`, and `shard_count=53`.
+  Reader, recovery, publish, audit, and Beijing-poll failure counters were all zero. Main, Beijing,
+  and manual publication completed 622/622, 116/116, and 228/228 TCP sends with no HTTP fallback.
+- A controlled two-endpoint run put an unreachable endpoint first. All 53 workers failed over once
+  and recovered (`endpoint_failovers=53`, `reader_failures=53`, `reader_recoveries=53`) without a
+  publish, audit, Beijing-poll, TCP, or ACK failure. Deployment `112317-18d09f02146d4728` then
+  restored the built-in five-endpoint pool. The gateway's cumulative `ingest_failures=1` remained
+  unchanged across consecutive post-restore samples while message sequence and receive timestamps
+  continued advancing, so the single failure is bounded to the deployment transition window.
+- The restored process held all 53 full-push worker connections on the default first endpoint
+  `120.195.71.160:7709`. Replacement is still blocked: the quality report had
+  `peer_comparable_count=0`, `evidence_gate_passed=false`, and `can_replace_all=false`. Rust covered
+  5,545 symbols (99.89%) but event-to-arrival latency was p50/p95/p99 21.187/45.192/45.314s versus
+  Wine's 2.002/4.970/5.443s. Wine must remain online as the comparison source.
 
 ## Open Problems
 
@@ -71,11 +90,23 @@ The native implementation does not yet fully replace the vendor `Tdx_Encrypt / p
 post-login shell, local `2000` bridge, or the complete code-table, corporate-action, finance, file,
 and real-time initialization object sequence.
 
+Historical bar supplementation is no longer part of this gap: its daily/five-minute/one-minute
+business layer is implemented separately. Corporate-action, finance, and file refresh remain in
+this initialization gap.
+
 ### P1: Prove long-lived same-account behavior
 
 Short overlap between Wine and Rust account `1522` sessions caused no immediate conflict. Long-lived
 parallel sessions have not yet proved whether the vendor backend applies delayed session eviction,
 resource limits, or account-level exclusivity.
+
+### P1: Close the Wine replacement evidence and latency gap
+
+The native route has stronger standalone coverage, a proven five-endpoint pool, and controlled
+failover recovery, but the 2026-08-31 quality snapshot still had no peer-comparable samples and was
+materially slower than Wine. Keep Wine enabled until `can_replace_all=true`, peer-comparison coverage
+passes the configured evidence gate, no final codes are lost, and Rust latency is competitive over a
+representative open-market window.
 
 ### P2: Complete legacy client compatibility
 
@@ -93,6 +124,7 @@ contracts still require controlled Windows validation.
 - TCP client cache fix commit: `28ea978`
 - Workspace regression request: `151138-18c8f2f31ead11bc`
 - Deployment request: `151328-18c8f2f31ead11be`
+- Five-endpoint restore deployment: `112317-18d09f02146d4728`
 
 ## Acceptance Checklist
 
@@ -104,6 +136,10 @@ contracts still require controlled Windows validation.
 - [x] Shanghai/Shenzhen readers recover transient session-start failures without descriptor-related
   failures.
 - [x] Beijing polling and gateway ACK publication remain healthy throughout the same session.
+- [x] Default five-endpoint operation and one-failure-per-shard controlled failover are proven under
+  a complete live session, followed by restoration to the default pool.
+- [ ] Rust passes the quoteGateway replacement evidence gate and reaches competitive Wine-relative
+  event-to-arrival latency over a representative open-market window.
 - [ ] Resident 7100 authentication and reconnect state are visible through service status.
 - [ ] Long-lived Wine/Rust account overlap is either proven safe or replaced by an explicit ownership
   policy.
