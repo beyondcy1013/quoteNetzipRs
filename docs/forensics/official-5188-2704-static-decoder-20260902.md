@@ -156,6 +156,11 @@ tail token and byte alignment with 38 tests. A value record marked
 caller resolver supplies a 311-byte baseline; it is never decoded from a
 zero-filled placeholder.
 
+Request `042911-18d1330bb455c53e` (3067) also passed all 38 tests after adding
+serde output for decoded internal records. The 311-byte payload is serialized
+as raw bytes because the pinned serde version does not implement serialization
+for arrays larger than 32 elements.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
