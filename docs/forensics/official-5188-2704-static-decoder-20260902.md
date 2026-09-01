@@ -161,6 +161,11 @@ serde output for decoded internal records. The 311-byte payload is serialized
 as raw bytes because the pinned serde version does not implement serialization
 for arrays larger than 32 elements.
 
+Request `043139-18d1330bb455c540` (3069) passed the same 38-test suite after
+correcting the special-path fixture to include the fixed `0x5b2998` tail-token
+raw width. This confirms the tail-token table selection and alignment test
+against the current Wine token table.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
