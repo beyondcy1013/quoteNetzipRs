@@ -185,6 +185,13 @@ Request `044026-18d1330bb455c546` (3075) passed 39 tests after correcting the
 ladder fixture expectation: the `0x5b2518` `E(1)` token is relative to the
 previous ladder price, so a restored predecessor of `19` produces `20`.
 
+Request `044258-18d1330bb455c547` (netzip_win log `3001`) passed 39 tests after
+matching Wine's negative ladder-move control flow for `code=-1`: when a
+baseline exists, Wine restores the full internal 16-slot price workspace before
+returning from the move decoder. The Rust decoder now performs that restore;
+the public ten-level mapping and callback parity remain gated on historical
+same-symbol/same-timestamp replay.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
