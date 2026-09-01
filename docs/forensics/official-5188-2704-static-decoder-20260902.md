@@ -209,6 +209,21 @@ large-forensic tests. This confirms the shared-crate changes compile through the
 relative dependency path and do not break the authentication, capture, or
 official-5188 runtime APIs.
 
+Request `045359-18d1330bb455c54b` (netzip_win log `3004`) passed 41 tests after
+adding `Official5188MapBaselineResolver::update_from_decoded` for cross-frame
+replay. It persists successful records while excluding `mask_class == 0x18`,
+matching Wine's global-table copy-back boundary.
+
+The extended `official_5188_extract` built successfully in request
+`045813-18d1330bb455c54e` (log `3079`) and scanned the retained 325 MiB Wine core
+for the exact `(market, symbol_index)` set required by the formal PCAP. It found
+1,797 valid 311-byte baselines. Rust then decoded 13 of 15 `2704` frames without
+a value-reader error. The remaining frame heads require `SZ` index `3394`
+(`300636`) and `4235` (`399015`); neither record exists in the retained core,
+which the independent Python core scanner also confirms. These two frames must
+be seeded from earlier bulk/initialization state or a synchronized Wine state
+snapshot. They remain explicit missing-baseline errors and are not zero-filled.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
