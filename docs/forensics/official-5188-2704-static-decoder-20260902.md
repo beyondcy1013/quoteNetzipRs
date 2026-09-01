@@ -166,6 +166,11 @@ correcting the special-path fixture to include the fixed `0x5b2998` tail-token
 raw width. This confirms the tail-token table selection and alignment test
 against the current Wine token table.
 
+The subsequent 3070 regression also passed 38 tests. It corrected a control
+flow detail found by comparing the Rust implementation with the executable
+prototype: Wine invokes `0x5b2560` ladder-move only when a baseline exists;
+fresh records skip that token and enter the fresh-ladder mask path directly.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
