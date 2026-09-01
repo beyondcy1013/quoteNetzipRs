@@ -203,6 +203,12 @@ or copy a baseline, consume the `+0xda` tail token, align the value reader, or
 write the per-stream baseline cache. Subsequent records therefore begin at the
 same 13-bit position as in Wine.
 
+The upper `quoteNetzipRs` library regression request
+`045029-18d1330bb455c54a` (log `3076`) passed 93 tests with 2 explicitly ignored
+large-forensic tests. This confirms the shared-crate changes compile through the
+relative dependency path and do not break the authentication, capture, or
+official-5188 runtime APIs.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
