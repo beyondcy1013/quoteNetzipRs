@@ -197,6 +197,12 @@ matching the `mask_class == 0x18` early return at `0x44981b`. Wine exits before
 the optional timestamp-delta token is read; the Rust decoder now preserves the
 reader position and indexed timestamp for this class.
 
+Request `044826-18d1330bb455c549` (netzip_win log `3003`) passed 40 tests after
+matching the complete `mask_class == 0x18` boundary: this path does not resolve
+or copy a baseline, consume the `+0xda` tail token, align the value reader, or
+write the per-stream baseline cache. Subsequent records therefore begin at the
+same 13-bit position as in Wine.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
