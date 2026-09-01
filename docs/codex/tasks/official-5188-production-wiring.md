@@ -244,6 +244,40 @@ The reusable `official_6100_decode` example accepts complete packets or a
 reassembled stream and calls the shared crate's bounded
 `auth_7100::decode_stock_dictionary_netpacket` API.
 
+## Callback-window value parity checkpoint (2026-09-02)
+
+`examples/official_5188_callback_parity.rs` now provides a repeatable offline
+comparison between an `official_5188_extract` directory and Wine callback
+JSONL. It resolves every record through the captured `0104` table, assigns it
+to the nearest callback batch within a bounded time window only when
+`market+code` is present, compares numeric fields by IEEE-754 `f32` bits, and
+reports timestamp differences instead of silently accepting them.
+
+The formal fixture replay completed through webClx request
+`070921-18d1330bb455c57b` (`3108_build.log`, status 0). With a 250 ms window:
+
+- all 2,102 decoded records resolved to `0104` metadata;
+- 1,792 records matched callback sequences 34, 35, or 36 by time and code;
+- sequence 34 matched all 1,059 callback symbols and sequence 35 matched all
+  436 callback symbols; sequence 36 matched 297 of 445 callback symbols;
+- names matched 1,792/1,792, but exact field hits remained incomplete:
+  `price=355`, `last_close=1380`, `open=441`, `high=411`, `low=387`,
+  `volume=377`, `amount=92`, `ask_prices=333`, `bid_prices=321`;
+- 974/1,792 internal timestamps exactly matched callback local time converted
+  to Unix seconds; the other records include the observed close-time `+1s`
+  internal value and remain explicitly mismatched.
+
+`SH603059` is assigned to sequence 34, not the later sequence 54 snapshot.
+Its price, last close, OHLC, and volume match, while the decoded record has
+`amount=107380`, incomplete ladder state, and timestamp `1788246001`; the Wine
+callback has `amount=25934334`, a complete five-level ladder, and local
+`2026-09-01 15:00:00`. The retained core also contains both a metadata-only
+slot and a complete public-state slot for this identity. This rules out batch
+54 comparison as the sole cause and shows that a decoded 311-byte `2704`
+record is not yet a publishable quote by itself. The next parity slice is the
+Wine public-state/OEM-report merge after `0x44aa30`, not an arithmetic patch in
+`to_public_quote`. The production decoder gate remains closed.
+
 ## Historical Wine evidence update (2026-09-02)
 
 The paired capture

@@ -107,12 +107,33 @@ record reconstructs the paired OHLC integers and volume exactly
 this fixed formal fixture, but not callback conversion or batch aggregation;
 the production lane remains gated on those checks.
 
+The callback-window replay in webClx request `070921-18d1330bb455c57b`
+clarifies that “complete 311-byte record” above means complete decoder output,
+not a complete public quote snapshot. Of 2,102 decoded records, 1,792 match a
+nearby Wine callback row by `market+code`; only 355 prices, 92 amounts, 333 ask
+price arrays, and 321 bid price arrays match exactly under Wine `f32`
+semantics. Last close is much more stable at 1,380 matches. Sequence 34 and 35
+account for 1,495 matched symbols, almost the entire first 1,500-record frame
+group, so the mismatch cannot be dismissed as comparison against the later
+sequence 54 snapshot.
+
+For `SH603059`, the time-window assignment is sequence 34 and the decoded
+OHLC/price/volume fields match that callback, but amount and both sides of the
+ladder do not. The retained core contains two strict-identity slots with the
+same code metadata: a metadata/reference-price state and a complete public
+state. Therefore the evidence now supports a separate public-state merge after
+the `2704` value pass. It does not support adding a fixed amount correction or
+publishing the partial decoder output through `to_public_quote`. The remaining
+static target is the OEM-report/public-table merge reachable after the sole
+caller of `0x44aa30` at `0x49741e`.
+
 ## 2026-09-02 paired internal-record mapping
 
 The synchronized formal fixture and the retained Wine core provide one
-same-symbol, same-timestamp internal-record match.  The 311-byte record at
-the baseline slot for `SH` symbol index `24661` (`603059`) contains the
-following values:
+same-symbol, same-timestamp public-state match. The complete 311-byte core slot
+for `SH` symbol index `24661` (`603059`) contains the following values; a
+separate metadata/reference-price slot with the same identity also exists, so
+the complete slot is not assumed to be the value decoder's baseline table:
 
 | Internal offset | Meaning | Observed value | Wine callback field |
 |---:|---|---:|---|
