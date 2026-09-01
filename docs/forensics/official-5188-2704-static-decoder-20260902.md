@@ -127,6 +127,11 @@ following values:
 | `+0xa8..0xcc` | ten level volumes | `19,14,8,22,2,16,12,2,44,25` | internal order is bid volumes reversed, then ask volumes |
 
 Price integers use the security decimal scale (for this SH equity, cents).
+The captured `0104` records provide a bounded metadata hint at
+`opaque_tail[1]`: across six-digit securities in the formal replay it is
+currently observed as `1`, `10`, or `100`.  Known equity, index, and ETF rows
+use `100`, while sampled government-bond rows use `10`; unknown values remain
+unresolved and are rejected by the Rust hint API rather than guessed.
 The internal amount differs from the callback's IEEE-754-derived value by a
 small rounding/derivation delta, so amount parity must be tested with the
 Wine conversion rule rather than integer equality.  This evidence confirms
