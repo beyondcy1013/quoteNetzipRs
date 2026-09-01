@@ -176,6 +176,11 @@ baseline ladder path to restore the full internal 16-slot price workspace
 before applying a normal move. This is required because the header may clear
 the public ladder before Wine performs the internal move.
 
+Requests `043438-18d1330bb455c542` (3071) and
+`043552-18d1330bb455c543` (3072) each passed 38 tests, covering persistence of
+the `+0xde` baseline marker and Wine's two-step baseline amount delta
+calculation respectively.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
