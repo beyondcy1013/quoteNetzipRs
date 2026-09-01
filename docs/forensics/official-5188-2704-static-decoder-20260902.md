@@ -131,6 +131,17 @@ same-timestamp parity across an independent Wine fixture.
 
 ## Verification
 
+## Latest compile checkpoint (2026-09-02)
+
+The shared-crate value-header re-export and the 5188 value-header control-flow
+regression compile successfully through webClx request
+`040321-18d1330bb455c531`; build log:
+`/home/bin/webclx/logs/quoteNetzipRs/3054_build.log`. The regression covered
+34 `official_5188` tests, 7 `debug_pcap` tests (one large-sample test remains
+ignored), and the `official_5188_extract` example. This confirms the current
+transport, envelope, index-state, and value-header APIs compile together; it
+does not change the production decoder gate below.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
