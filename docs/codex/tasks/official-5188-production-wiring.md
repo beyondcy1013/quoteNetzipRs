@@ -212,6 +212,15 @@ decoded records, and zero loaded core baselines. Its callback JSONL is empty.
 This is retained as formal negative evidence and does not count as a second
 business or callback-parity fixture.
 
+The same capture was re-read after adding Linux cooked v2 (DLT 276) support to
+`pcap_summary` through webClx request `062719-18d1330bb455c574`. The parser now
+sees 703 pcap packets and 338 unique packets. The ten 5188 server flows still
+contain only 10-byte `3901` control frames; the only compressed business-shaped
+traffic is two complete ZSTD packets on `121.41.70.217:6100` (328 bytes each).
+This confirms the earlier zero-packet result was a link-layer parser gap and
+keeps the 6100 path as a separate `needs-verification` lead rather than
+promoting it to the 5188 decoder.
+
 ## Historical Wine evidence update (2026-09-02)
 
 The paired capture
