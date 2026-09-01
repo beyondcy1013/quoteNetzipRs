@@ -36,6 +36,7 @@ struct ResolvedDeltaIndex {
     uses_baseline: bool,
     code: Option<String>,
     name: Option<String>,
+    price_scale_hint: Option<f64>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -127,13 +128,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                             .get(&index.market)
                             .and_then(|table| table.record(index.symbol_index))
                             .filter(|record| !record.code.is_empty());
+                        let (code, name, price_scale_hint) = record
+                            .map(|record| {
+                                (
+                                    Some(record.code.clone()),
+                                    Some(record.name.clone()),
+                                    record.price_scale_hint(),
+                                )
+                            })
+                            .unwrap_or((None, None, None));
                         ResolvedDeltaIndex {
                             market: String::from_utf8_lossy(&index.market).into_owned(),
                             symbol_index: index.symbol_index,
                             timestamp: index.timestamp,
                             uses_baseline: index.uses_baseline,
-                            code: record.map(|record| record.code.clone()),
-                            name: record.map(|record| record.name.clone()),
+                            code,
+                            name,
+                            price_scale_hint,
                         }
                     })
                     .collect::<Vec<_>>();
