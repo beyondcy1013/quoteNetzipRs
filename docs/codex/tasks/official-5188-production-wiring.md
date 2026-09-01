@@ -221,6 +221,29 @@ This confirms the earlier zero-packet result was a link-layer parser gap and
 keeps the 6100 path as a separate `needs-verification` lead rather than
 promoting it to the 5188 decoder.
 
+The 6100 lead was resolved with the vendored `Stock.字典` in webClx requests
+`064045-18d1330bb455c578` (`3105_build.log`) and
+`064353-18d1330bb455c579` (`3106_build.log`). `pcap_reassemble` now supports
+DLT 276 as well, so both directions were deduplicated and reconstructed from
+the same capture without manual byte offsets:
+
+- client to server: two 586-byte packets, each decoding to an 848-byte,
+  19-field `认证` object whose request is `心跳包`; account and password fields
+  are redacted by the analysis tool;
+- server to client: two 328-byte packets, each decoding to a 308-byte,
+  7-field `认证` response whose request is `心跳包` and source is `认证服务器`;
+  the remaining fields are answer number, current login count, total/current
+  bandwidth, and account expiry;
+- neither direction contains a security code, quote ladder, trade value,
+  `0104`, or `2704` object.
+
+Therefore this formal fixture's 6100 traffic is authenticated heartbeat
+control traffic, not a second full-push business transport. It must not be
+fed to the 5188 decoder or used to clear the production business-parity gate.
+The reusable `official_6100_decode` example accepts complete packets or a
+reassembled stream and calls the shared crate's bounded
+`auth_7100::decode_stock_dictionary_netpacket` API.
+
 ## Historical Wine evidence update (2026-09-02)
 
 The paired capture

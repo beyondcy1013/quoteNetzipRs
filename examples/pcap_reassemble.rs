@@ -228,6 +228,7 @@ fn parse_pcap(bytes: &[u8]) -> Result<Vec<TcpPacket>, Box<dyn Error>> {
     }
 
     let (endian, scale) = parse_global_header(&bytes[..24])?;
+    let link_type = read_u32(endian, &bytes[20..24])?;
     let mut offset = 24usize;
     let mut packets = Vec::new();
 
@@ -245,7 +246,8 @@ fn parse_pcap(bytes: &[u8]) -> Result<Vec<TcpPacket>, Box<dyn Error>> {
         let frame = &bytes[offset..offset + incl_len_usize];
         offset += incl_len_usize;
 
-        let Some(packet) = parse_tcp_packet(frame, incl_len, orig_len, ts_sec, ts_frac, scale)
+        let Some(packet) =
+            parse_tcp_packet(frame, incl_len, orig_len, ts_sec, ts_frac, scale, link_type)
         else {
             continue;
         };
@@ -280,30 +282,50 @@ fn parse_tcp_packet(
     _ts_sec: u32,
     _ts_frac: u32,
     _scale: TimestampScale,
+    link_type: u32,
 ) -> Option<TcpPacket> {
-    if frame.len() < 14 + 20 + 20 {
+    let (network_offset, protocol_offset) = match link_type {
+        1 => (14usize, 12usize),  // DLT_EN10MB
+        276 => (20usize, 0usize), // DLT_LINUX_SLL2
+        _ => return None,
+    };
+    if frame.len() < network_offset + 20 + 20 {
         return None;
     }
-    if frame[12..14] != [0x08, 0x00] {
+    if frame[protocol_offset..protocol_offset + 2] != [0x08, 0x00] {
         return None;
     }
 
-    let ihl = ((frame[14] & 0x0f) as usize) * 4;
-    if frame.len() < 14 + ihl + 20 || frame[23] != 6 {
+    let ihl = ((frame[network_offset] & 0x0f) as usize) * 4;
+    if frame.len() < network_offset + ihl + 20 || frame[network_offset + 9] != 6 {
         return None;
     }
 
-    let ip_total_len = u16::from_be_bytes([frame[16], frame[17]]) as usize;
+    let ip_total_len =
+        u16::from_be_bytes([frame[network_offset + 2], frame[network_offset + 3]]) as usize;
     let src = Endpoint {
-        ip: Ipv4Addr::new(frame[26], frame[27], frame[28], frame[29]),
-        port: u16::from_be_bytes([frame[34], frame[35]]),
+        ip: Ipv4Addr::new(
+            frame[network_offset + 12],
+            frame[network_offset + 13],
+            frame[network_offset + 14],
+            frame[network_offset + 15],
+        ),
+        port: u16::from_be_bytes([frame[network_offset + ihl], frame[network_offset + ihl + 1]]),
     };
     let dst = Endpoint {
-        ip: Ipv4Addr::new(frame[30], frame[31], frame[32], frame[33]),
-        port: u16::from_be_bytes([frame[36], frame[37]]),
+        ip: Ipv4Addr::new(
+            frame[network_offset + 16],
+            frame[network_offset + 17],
+            frame[network_offset + 18],
+            frame[network_offset + 19],
+        ),
+        port: u16::from_be_bytes([
+            frame[network_offset + ihl + 2],
+            frame[network_offset + ihl + 3],
+        ]),
     };
 
-    let tcp_start = 14 + ihl;
+    let tcp_start = network_offset + ihl;
     let tcp_header_len = (((frame[tcp_start + 12] >> 4) & 0x0f) as usize) * 4;
     if frame.len() < tcp_start + tcp_header_len {
         return None;
@@ -325,7 +347,7 @@ fn parse_tcp_packet(
 
     let payload_start = tcp_start + tcp_header_len;
     let wire_payload_len = ip_total_len.saturating_sub(ihl + tcp_header_len);
-    let payload_end = frame.len().min(14 + ip_total_len);
+    let payload_end = frame.len().min(network_offset + ip_total_len);
     let captured_payload = if payload_start < payload_end {
         frame[payload_start..payload_end].to_vec()
     } else {
