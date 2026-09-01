@@ -70,6 +70,34 @@ the final replay parsed 36 code tables and resolved all 2,102 delta indexes
 - Aggregation rules from one or more `2704` frames into a Wine callback batch.
 - Field parity for time, OHLC, price levels, volume, amount and status flags.
 
+## 2026-09-02 value-pass control-flow checkpoint
+
+An executable Python prototype was replayed against the 15 extracted `2704`
+value/index pairs from formal Wine fixture `formal-primary-0006`. The details
+that previously caused early drift were corrected from the vendor instructions
+at `0x449770`, its helpers and caller `0x44aa30`:
+
+- the top-level special branch is selected by `(header >> 2) & 7 == 7`; the
+  header bit 0 is only the ladder-clear flag;
+- variable x86 shifts use the masked five-bit count when the ladder bounds are
+  outside the normal `0..5` range;
+- a successful record consumes the trailing `+0xda` token and then rounds the
+  reader position up to the next byte;
+- ladder-move is called only when a baseline exists, and its two output flags
+  separately control merge behavior and whether ladder decoding continues;
+- the internal price-move workspace has 16 slots at `+0x58`, while only its
+  first ten slots are exposed as the public bid/ask ladder.
+
+With those corrections, all 15 streams traverse all 2,102 declared records
+without an index/value reader overrun or an invalid internal ladder index. The
+first `SH603059` record reconstructs the paired OHLC integers and volume exactly
+(`2509/2556/2502/2517`, `10261`) when seeded with the security metadata retained
+in the Wine core. Amount derivation and complete ladder parity remain open: the
+vendor uses metadata-dependent arithmetic before the amount token, and the core
+contains state after later updates rather than a guaranteed pre-frame baseline.
+This is therefore a control-flow and bit-consumption checkpoint, not permission
+to publish decoded quotes. The prototype is not wired into the production lane.
+
 ## 2026-09-02 paired internal-record mapping
 
 The synchronized formal fixture and the retained Wine core provide one
