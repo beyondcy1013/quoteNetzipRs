@@ -181,6 +181,10 @@ Requests `043438-18d1330bb455c542` (3071) and
 the `+0xde` baseline marker and Wine's two-step baseline amount delta
 calculation respectively.
 
+Request `044026-18d1330bb455c546` (3075) passed 39 tests after correcting the
+ladder fixture expectation: the `0x5b2518` `E(1)` token is relative to the
+previous ladder price, so a restored predecessor of `19` produces `20`.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
