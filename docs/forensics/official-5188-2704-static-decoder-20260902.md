@@ -171,6 +171,11 @@ flow detail found by comparing the Rust implementation with the executable
 prototype: Wine invokes `0x5b2560` ladder-move only when a baseline exists;
 fresh records skip that token and enter the fresh-ladder mask path directly.
 
+Request `043648-18d1330bb455c544` (3073) passed 38 tests after correcting the
+baseline ladder path to restore the full internal 16-slot price workspace
+before applying a normal move. This is required because the header may clear
+the public ladder before Wine performs the internal move.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
