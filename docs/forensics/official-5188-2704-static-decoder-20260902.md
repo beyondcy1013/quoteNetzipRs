@@ -61,6 +61,10 @@ the final replay parsed 36 code tables and resolved all 2,102 delta indexes
   `98 + record_count * 68` and maps each embedded zero-based symbol index to its ASCII
   code and GBK name. The exporter writes both the complete code tables and
   resolved delta-index rows.
+- `decode_official_5188_values` exposes an experimental record-level value
+  pass with Wine token tables, baseline resolver injection, 311-byte internal
+  records, and bit-consumption spans. `Official5188MapBaselineResolver` is
+  provided for offline replay fixtures.
 
 ## Not yet confirmed
 
@@ -96,7 +100,9 @@ in the Wine core. Amount derivation and complete ladder parity remain open: the
 vendor uses metadata-dependent arithmetic before the amount token, and the core
 contains state after later updates rather than a guaranteed pre-frame baseline.
 This is therefore a control-flow and bit-consumption checkpoint, not permission
-to publish decoded quotes. The prototype is not wired into the production lane.
+to publish decoded quotes. The record-level Rust API is not wired into the
+production lane until complete ladder, amount, callback parity, and multi-frame
+aggregation checks pass.
 
 ## 2026-09-02 paired internal-record mapping
 
