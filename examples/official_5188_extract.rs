@@ -228,7 +228,7 @@ fn load_core_baselines(
         }
         let record = netzip_fullpull::Official5188InternalRecord::decode(&core[start..end])?;
         let timestamp = record.timestamp();
-        if !(1_700_000_000..=1_900_000_000).contains(&timestamp) {
+        if !is_core_baseline_candidate(&record) {
             continue;
         }
         let nonzero = record.as_bytes().iter().filter(|byte| **byte != 0).count();
@@ -245,6 +245,23 @@ fn load_core_baselines(
         .into_iter()
         .map(|(key, (_, _, record))| (key, record))
         .collect())
+}
+
+fn is_core_baseline_candidate(
+    record: &netzip_fullpull::Official5188InternalRecord,
+) -> bool {
+    if (1_700_000_000..=1_900_000_000).contains(&record.timestamp()) {
+        return true;
+    }
+    if record.timestamp() != 0 {
+        return false;
+    }
+    let bytes = record.as_bytes();
+    let metadata_code = &bytes[0xe3..0xeb];
+    let reference_price = i32::from_le_bytes(bytes[0x12b..0x12f].try_into().unwrap());
+    metadata_code[..2] == record.market()
+        && metadata_code[2..].iter().all(u8::is_ascii_digit)
+        && reference_price > 0
 }
 
 fn write_optional(
@@ -267,4 +284,38 @@ fn endpoint_slug(endpoint: &str) -> String {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(bytes: &[u8; netzip_fullpull::OFFICIAL_5188_INTERNAL_RECORD_LEN]) -> netzip_fullpull::Official5188InternalRecord {
+        netzip_fullpull::Official5188InternalRecord::decode(bytes).unwrap()
+    }
+
+    #[test]
+    fn core_baseline_candidate_accepts_live_record() {
+        let mut bytes = [0u8; netzip_fullpull::OFFICIAL_5188_INTERNAL_RECORD_LEN];
+        bytes[..4].copy_from_slice(&1_788_246_000u32.to_le_bytes());
+        assert!(is_core_baseline_candidate(&record(&bytes)));
+    }
+
+    #[test]
+    fn core_baseline_candidate_accepts_metadata_initialized_slot() {
+        let mut bytes = [0u8; netzip_fullpull::OFFICIAL_5188_INTERNAL_RECORD_LEN];
+        bytes[0xdf..0xe1].copy_from_slice(&3395u16.to_le_bytes());
+        bytes[0xe1..0xe3].copy_from_slice(b"SZ");
+        bytes[0xe3..0xeb].copy_from_slice(b"SZ300637");
+        bytes[0x12b..0x12f].copy_from_slice(&992i32.to_le_bytes());
+        assert!(is_core_baseline_candidate(&record(&bytes)));
+    }
+
+    #[test]
+    fn core_baseline_candidate_rejects_weak_empty_slot() {
+        let mut bytes = [0u8; netzip_fullpull::OFFICIAL_5188_INTERNAL_RECORD_LEN];
+        bytes[0xdf..0xe1].copy_from_slice(&3395u16.to_le_bytes());
+        bytes[0xe1..0xe3].copy_from_slice(b"SZ");
+        assert!(!is_core_baseline_candidate(&record(&bytes)));
+    }
 }

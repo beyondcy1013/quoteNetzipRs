@@ -22,8 +22,10 @@ index_bits = payload[value_end_offset..payload_len]
 `value_end_offset - 6` bytes beginning at `payload + 6` for the value reader.
 
 The index pass initializes one 311-byte (`0x137`) internal record per count and
-restores four state values: market, symbol index, timestamp and whether the
-value pass uses a baseline record. `0x448a10` reads bits MSB first. `0x448b90` and
+restores four state values: market, symbol index, timestamp and the internal
+`+0xde` marker currently exposed as `uses_baseline`. The value mask bit 0,
+independently of that marker, selects whether the value decoder receives the
+full global record as its baseline. `0x448a10` reads bits MSB first. `0x448b90` and
 `0x448d10` use 13-byte prefix-token entries. The tables used by the index pass
 are at `0x5b2318` (market), `0x5b22fc` (market slot), and `0x5b22b8` (code-table
 index). Rust reproduces these tables without reading or executing the vendor
@@ -68,11 +70,10 @@ the final replay parsed 36 code tables and resolved all 2,102 delta indexes
 
 ## Not yet confirmed
 
-- The field table and all delta dependencies inside `0x449770`.
-- The exact baseline-record lookup and lifetime rules behind `uses_baseline`.
 - Whether every less common market table uses the same zero-based index rule.
 - Aggregation rules from one or more `2704` frames into a Wine callback batch.
-- Field parity for time, OHLC, price levels, volume, amount and status flags.
+- Callback conversion parity for time, OHLC, price levels, volume, amount,
+  scale, market/code and status flags.
 
 ## 2026-09-02 value-pass control-flow checkpoint
 
@@ -90,19 +91,21 @@ at `0x449770`, its helpers and caller `0x44aa30`:
 - ladder-move is called only when a baseline exists, and its two output flags
   separately control merge behavior and whether ladder decoding continues;
 - the internal price-move workspace has 16 slots at `+0x58`, while only its
-  first ten slots are exposed as the public bid/ask ladder.
+  first ten slots are exposed as the public bid/ask ladder;
+- uppercase `S` tokens decode as `(raw << shift) + base`, uppercase `P` tokens
+  as `(1 << raw) + base`, and lowercase `m` fills all bits above the token
+  width before adding its base;
+- the level-count special path skips aux/OHLC/accumulator work but still joins
+  the clear-ladder path when the header requests a clear.
 
-With those corrections, all 15 streams traverse all 2,102 declared records
-without an index/value reader overrun or an invalid internal ladder index. The
-first `SH603059` record reconstructs the paired OHLC integers and volume exactly
-(`2509/2556/2502/2517`, `10261`) when seeded with the security metadata retained
-in the Wine core. Amount derivation and complete ladder parity remain open: the
-vendor uses metadata-dependent arithmetic before the amount token, and the core
-contains state after later updates rather than a guaranteed pre-frame baseline.
-This is therefore a control-flow and bit-consumption checkpoint, not permission
-to publish decoded quotes. The record-level Rust API is not wired into the
-production lane until complete ladder, amount, callback parity, and multi-frame
-aggregation checks pass.
+With those corrections, Rust traverses all 15 streams and all 2,102 declared
+records. An independent Python implementation retained the resolver across
+frames and compared every export: all 2,102 `bit_start`, `bit_end`, and complete
+311-byte records matched, with `first_mismatch=null`. The first `SH603059`
+record reconstructs the paired OHLC integers and volume exactly
+(`2509/2556/2502/2517`, `10261`). This proves the internal-record decoder for
+this fixed formal fixture, but not callback conversion or batch aggregation;
+the production lane remains gated on those checks.
 
 ## 2026-09-02 paired internal-record mapping
 
@@ -151,10 +154,11 @@ does not change the production decoder gate below.
 The follow-up webClx regressions also passed: request
 `042614-18d1330bb455c53b` (3064) covered missing-baseline rejection with 37
 tests, and request `042723-18d1330bb455c53c` (3065) covered the special-path
-tail token and byte alignment with 38 tests. A value record marked
-`uses_baseline` now fails explicitly when neither the per-stream cache nor the
+tail token and byte alignment with 38 tests. A value record whose value mask
+bit 0 is set now fails explicitly when neither the per-stream cache nor the
 caller resolver supplies a 311-byte baseline; it is never decoded from a
-zero-filled placeholder.
+zero-filled placeholder. The index-pass `+0xde` marker does not select the
+baseline pointer.
 
 Request `042911-18d1330bb455c53e` (3067) also passed all 38 tests after adding
 serde output for decoded internal records. The 311-byte payload is serialized
@@ -198,10 +202,11 @@ the optional timestamp-delta token is read; the Rust decoder now preserves the
 reader position and indexed timestamp for this class.
 
 Request `044826-18d1330bb455c549` (netzip_win log `3003`) passed 40 tests after
-matching the complete `mask_class == 0x18` boundary: this path does not resolve
-or copy a baseline, consume the `+0xda` tail token, align the value reader, or
-write the per-stream baseline cache. Subsequent records therefore begin at the
-same 13-bit position as in Wine.
+matching the inner `mask_class == 0x18` boundary: this path does not consume the
+`+0xda` tail token or align the value reader. Later static comparison established
+that the outer `2704` loop still copies global metadata into the temporary record
+and writes the result back to the global table. Subsequent records begin at the
+same 13-bit position as in Wine while retaining that outer copyback.
 
 The upper `quoteNetzipRs` library regression request
 `045029-18d1330bb455c54a` (log `3076`) passed 93 tests with 2 explicitly ignored
@@ -211,18 +216,21 @@ official-5188 runtime APIs.
 
 Request `045359-18d1330bb455c54b` (netzip_win log `3004`) passed 41 tests after
 adding `Official5188MapBaselineResolver::update_from_decoded` for cross-frame
-replay. It persists successful records while excluding `mask_class == 0x18`,
-matching Wine's global-table copy-back boundary.
+replay. Follow-up Wine control-flow comparison corrected this helper to persist
+the outer copyback for every decoded record, including `mask_class == 0x18`.
 
-The extended `official_5188_extract` built successfully in request
-`045813-18d1330bb455c54e` (log `3079`) and scanned the retained 325 MiB Wine core
-for the exact `(market, symbol_index)` set required by the formal PCAP. It found
-1,797 valid 311-byte baselines. Rust then decoded 13 of 15 `2704` frames without
-a value-reader error. The remaining frame heads require `SZ` index `3394`
-(`300636`) and `4235` (`399015`); neither record exists in the retained core,
-which the independent Python core scanner also confirms. These two frames must
-be seeded from earlier bulk/initialization state or a synchronized Wine state
-snapshot. They remain explicit missing-baseline errors and are not zero-filled.
+The extended `official_5188_extract` built successfully in webClx request
+`054903-18d1330bb455c565` (log `3091`) and now accepts metadata-initialized
+global slots only when timestamp is zero, `+0xe3` is `MARKET + six ASCII digits`,
+and `+0x12b` reference price is positive. This recovered `SZ` index `3395`
+(`SZ300637`, reference `992`) and `SH` index `22668` (`SH510020`, reference
+`3934`) while rejecting identity-only weak empty matches.
+
+The export `/tmp/official-5188-rust-value-replay-054903-formal` reports 15
+decoded frames, 2,102 records, and zero errors. Independent replay with the
+same rule reports `{"frames":15,"records":2102,"core_baselines":2102,
+"first_mismatch":null}`; missing required baselines remain explicit errors,
+never zero-filled records.
 
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
