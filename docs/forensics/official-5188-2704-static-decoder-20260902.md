@@ -148,6 +148,14 @@ ignored), and the `official_5188_extract` example. This confirms the current
 transport, envelope, index-state, and value-header APIs compile together; it
 does not change the production decoder gate below.
 
+The follow-up webClx regressions also passed: request
+`042614-18d1330bb455c53b` (3064) covered missing-baseline rejection with 37
+tests, and request `042723-18d1330bb455c53c` (3065) covered the special-path
+tail token and byte alignment with 38 tests. A value record marked
+`uses_baseline` now fails explicitly when neither the per-stream cache nor the
+caller resolver supplies a 311-byte baseline; it is never decoded from a
+zero-filled placeholder.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
