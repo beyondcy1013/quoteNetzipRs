@@ -192,6 +192,11 @@ returning from the move decoder. The Rust decoder now performs that restore;
 the public ten-level mapping and callback parity remain gated on historical
 same-symbol/same-timestamp replay.
 
+Request `044624-18d1330bb455c548` (netzip_win log `3002`) passed 40 tests after
+matching the `mask_class == 0x18` early return at `0x44981b`. Wine exits before
+the optional timestamp-delta token is read; the Rust decoder now preserves the
+reader position and indexed timestamp for this class.
+
 ```bash
 objdump -d -M intel --start-address=0x44aa30 --stop-address=0x44adae \
   netzip_api_bin/NetzipAPI/StockC++/网际风.exe
