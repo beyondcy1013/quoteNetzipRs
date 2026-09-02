@@ -380,3 +380,12 @@ price-scale or array-order issue: the post-`0x44aa30` public-state copyback
 must select/merge the global slot after the value pass. This pair is now a
 fixed regression fixture for that merge; the value decoder's internal output
 remains unchanged until the copyback state machine is reconstructed.
+
+The shared crate now exposes `to_public_quote_with_public_state`, an explicit
+projection boundary for this merge. It keeps scalar fields from the decoded
+2704 record and takes only the ten-slot ladder from a caller-selected complete
+public-state record; it does not select a baseline or enable production
+publishing. On the formal replay, applying this explicit retained-slot
+selection to 574 same-window records improved ladder price/volume field hits
+from 236 to 705 with no observed regressions. This is evidence for the merge
+boundary and a reusable API contract, not a production parity sign-off.
