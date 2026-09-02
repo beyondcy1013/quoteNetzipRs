@@ -367,3 +367,16 @@ prediction can be close while still missing the SH603059 callback amount by
 semantics are not yet established from a paired record, so no adjustment is
 applied in `amount_prediction` until a fixture proves the formula. The
 production lane remains `pending-production-wiring`.
+
+The same SH603059 sample isolates the ladder merge boundary. The retained
+complete public slot has price integers
+`[2505,2508,2509,2510,2511,2517,2519,2520,2525,2530]` and volumes
+`[19,14,8,22,2,16,12,2,44,25]`, which project exactly to the Wine callback's
+five bid and five ask levels. The decoded 2704 temporary record for the same
+identity has mask `0x80`, `clear_ladder=true`, prices
+`[2514,2515,2516,2517,2518,0,0,0,0,0]`, and volumes
+`[10737,13,292,9936,24972,0,0,0,0,0]`. Therefore the mismatch is not a
+price-scale or array-order issue: the post-`0x44aa30` public-state copyback
+must select/merge the global slot after the value pass. This pair is now a
+fixed regression fixture for that merge; the value decoder's internal output
+remains unchanged until the copyback state machine is reconstructed.
