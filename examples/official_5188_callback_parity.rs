@@ -85,10 +85,18 @@ struct WineQuote {
     bid_volumes: [f64; 10],
 }
 
+#[derive(Clone)]
+struct IndexedQuote {
+    batch_sequence: u64,
+    batch_timestamp_ms: u64,
+    quote: WineQuote,
+}
+
+#[derive(Clone)]
 struct IndexedBatch {
     sequence: u64,
     timestamp_ms: u64,
-    quotes: HashMap<(String, String), WineQuote>,
+    quotes: Vec<IndexedQuote>,
 }
 
 #[derive(Default, Serialize)]
@@ -355,7 +363,11 @@ fn load_batches(path: &Path) -> Result<Vec<IndexedBatch>, Box<dyn Error>> {
         let quotes = batch
             .quotes
             .into_iter()
-            .map(|quote| ((quote.market.clone(), quote.code.clone()), quote))
+            .map(|quote| IndexedQuote {
+                batch_sequence: event.sequence,
+                batch_timestamp_ms: event.timestamp_ms,
+                quote,
+            })
             .collect();
         batches.push(IndexedBatch {
             sequence: event.sequence,
@@ -377,12 +389,26 @@ fn nearest_batch<'a>(
     let window_micros = i128::from(window_ms) * 1_000;
     batches
         .iter()
-        .filter_map(|batch| {
-            let quote = batch.quotes.get(key)?;
-            let delta = i128::from(batch.timestamp_ms) * 1_000 - frame_micros;
-            (delta.abs() <= window_micros).then_some((batch, quote, delta as i64))
+        .flat_map(|batch| {
+            batch
+                .quotes
+                .iter()
+                .filter(|indexed| indexed.quote.market == key.0 && indexed.quote.code == key.1)
+                .map(move |indexed| (batch, indexed))
         })
-        .min_by_key(|(batch, _, delta)| (delta.abs(), batch.timestamp_ms, batch.sequence))
+        .filter_map(|(batch, indexed)| {
+            let delta = i128::from(batch.timestamp_ms) * 1_000 - frame_micros;
+            (delta.abs() <= window_micros).then_some((batch, indexed, delta as i64))
+        })
+        .min_by_key(|(batch, indexed, delta)| {
+            (
+                delta.abs(),
+                indexed.batch_timestamp_ms,
+                indexed.batch_sequence,
+                batch.sequence,
+            )
+        })
+        .map(|(batch, indexed, delta)| (batch, &indexed.quote, delta))
 }
 
 struct Matches {

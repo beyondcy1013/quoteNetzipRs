@@ -3,8 +3,8 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use netzipapi_rust_demo::extract_official_5188_frames;
 use netzip_fullpull::Official5188MapBaselineResolver;
+use netzipapi_rust_demo::extract_official_5188_frames;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -301,7 +301,9 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn record(bytes: &[u8; netzip_fullpull::OFFICIAL_5188_INTERNAL_RECORD_LEN]) -> netzip_fullpull::Official5188InternalRecord {
+    fn record(
+        bytes: &[u8; netzip_fullpull::OFFICIAL_5188_INTERNAL_RECORD_LEN],
+    ) -> netzip_fullpull::Official5188InternalRecord {
         netzip_fullpull::Official5188InternalRecord::decode(bytes).unwrap()
     }
 

@@ -278,6 +278,44 @@ record is not yet a publishable quote by itself. The next parity slice is the
 Wine public-state/OEM-report merge after `0x44aa30`, not an arithmetic patch in
 `to_public_quote`. The production decoder gate remains closed.
 
+## Fresh pcap amount-prediction and baseline checkpoint (2026-09-02)
+
+The stale decoded-directory rerun was superseded by webClx request
+`073904-18d1330bb455c57f`, which rebuilt
+`/tmp/official-5188-rust-value-replay-amount-prediction` directly from
+`formal-primary-0006` and then compared against the paired callback JSONL.
+The decoder now reconstructs the SH603059 internal amount as `25934317`; the
+previous stale replay value `107380` is therefore fixed. Wine still exposes
+`25934334`, so the known OEM `f32` conversion remains separately open. The
+fresh report had `decoded=2102`, `metadata=2102`, `matched=1792`, and
+`amount=83`.
+
+A core-layout experiment confirmed that Wine memory contains both a
+metadata-only slot and a complete public slot for the same
+`(market, symbol_index)` identity. Accepting the timestamped complete slot in
+the existing scan reproduced the first 166-record frame byte-for-byte, but it
+selected only 2,099 baselines versus 2,102 and reduced full-capture parity to
+1,943 decoded records. The extractor therefore keeps the original conservative
+metadata-only scan and records complete-slot selection as a separate lead
+requiring explicit slot-table or capture-session segmentation. Separately, the
+callback tool found that a Wine batch can contain duplicate market/code rows.
+The old batch-level `HashMap` selected an arbitrary duplicate and distorted
+per-symbol parity. The parity
+tool now compares each decoded row against every matching quote in the same
+bounded window and keeps the closest duplicate. The aggregate parity values
+remain unchanged, and SH603059 still differs by the known callback amount
+conversion plus its partial public-state fields; remaining close-time and
+public-merge mismatches are not resolved.
+
+The follow-up webClx full workspace regression passed through request
+`074659-18d1330bb455c580` (`3113_build.log`, status 0): 124 shared-crate
+tests and the complete quoteNetzipRs workspace targets, including 93 lib
+tests, 65 service tests, and both extract/parity example tests. Local checks
+also passed `cargo fmt --all --check` and
+`cargo check -p netzip-fullpull --all-targets`. Production remains gated at
+`lane=pending-production-wiring` and
+`business_decoder=opaque-evidence-only`.
+
 ## Historical Wine evidence update (2026-09-02)
 
 The paired capture
@@ -307,3 +345,25 @@ decoder gate closed while using this capture to reconstruct the `2704` delta,
 `3e04`/`1504` bulk objects, and their relation to callbacks. No new Windows
 capture is required for this offline phase; a second independent paired Wine
 session remains the parity acceptance test.
+
+## Wine amount-branch static checkpoint (2026-09-02)
+
+The PE32 Wine binary was disassembled at `0x449df0..0x44a1a0`, the amount
+accumulator called from the `0x44aa30` public-state merge path. The branch
+selected by value mask `0x80` first chooses the baseline/non-baseline token
+tables (`0x5b2628`/`0x5b25f0`), then reads the metadata tail through the record
+pointer at `current+0xf3`:
+
+- `metadata+0x2c` is the mode byte;
+- `metadata+0x2e` is a 16-bit multiplier;
+- `metadata+0x30` is a 32-bit adjustment value.
+
+The branch performs two signed 64-bit divisions and an auxiliary helper call
+before adding the baseline amount. When the mode is zero, or mode eight with a
+non-zero adjustment, it increments the adjustment and adds it to the
+intermediate amount (`0x44a139..0x44a15c`). This explains why the current Rust
+prediction can be close while still missing the SH603059 callback amount by
+17 (`25934317` internal versus `25934334` Wine). The exact scale and helper
+semantics are not yet established from a paired record, so no adjustment is
+applied in `amount_prediction` until a fixture proves the formula. The
+production lane remains `pending-production-wiring`.
