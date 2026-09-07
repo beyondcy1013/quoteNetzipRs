@@ -5,10 +5,21 @@ description: Route quoteNetzipRs work between official authenticated full-push r
 
 # quoteNetzipRs Maintainer Entry
 
+Shared official 5188 protocol status is authoritative only in
+[`netzip-fullpull/docs`](../../../../crates/netzip-fullpull/docs/README.md). Load
+the complete project-level
+[`quote-netzip-rs-fullpull-replication`](../quote-netzip-rs-fullpull-replication/SKILL.md)
+skill for protocol work. This project skill owns Linux
+runtime, APIs, shadow operation, product publication, and rollback. Do not
+duplicate the shared decoder gap list here.
+
 ## 1. Project identity and operating constraints
 
 - Repository: `/home/codes/stock/quoteNetzipRs`.
-- Dedicated official full-push replication workflow: `.agents/skills/quote-netzip-rs-fullpull-replication/SKILL.md`.
+- Dedicated official full-push replication workflow: project-level
+  [`quote-netzip-rs-fullpull-replication`](../quote-netzip-rs-fullpull-replication/SKILL.md);
+  shared status is
+  [`netzip-fullpull/docs/STATUS.md`](../../../../crates/netzip-fullpull/docs/STATUS.md).
 - Any Wine-vs-Rust replication, protocol reconstruction, or diagnostic-capture
   work must be routed through that dedicated skill. Its canonical results ledger
   is `docs/fullpull-replication-authority.md`; raw capture inventory is
