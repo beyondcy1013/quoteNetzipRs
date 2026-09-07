@@ -1,3 +1,17 @@
+#![allow(
+    clippy::chunks_exact_to_as_chunks,
+    clippy::manual_is_multiple_of,
+    clippy::missing_safety_doc,
+    clippy::too_many_arguments,
+    clippy::collapsible_if,
+    clippy::manual_range_patterns,
+    clippy::items_after_test_module,
+    clippy::unnecessary_unwrap,
+    clippy::type_complexity,
+    clippy::field_reassign_with_default,
+    dead_code
+)]
+
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
@@ -224,6 +238,7 @@ struct SyncCodeTableResponse {
 struct CodeTablePreview {
     code: String,
     name: String,
+    volume_unit: u16,
     decimal_point: u8,
     pre_close: f32,
 }
@@ -250,7 +265,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 fn run_snapshot(config: &Tdx7709Config, args: SnapshotArgs) -> Result<(), Box<dyn Error>> {
     let normalized = normalize_symbol(&args.symbol)?;
     let category = resolve_kline_category(&args.kline_type)?;
-    let quote_request_items = augment_live_quote_symbols(&[normalized.clone()])
+    let quote_request_items = augment_live_quote_symbols(std::slice::from_ref(&normalized))
         .into_iter()
         .map(|item| Tdx7709QuoteRequestItem {
             market: item.market,
@@ -1196,6 +1211,7 @@ fn code_table_preview(record: &netzipapi_rust_demo::Tdx7709CodeTableRecord) -> C
     CodeTablePreview {
         code: record.code.clone(),
         name: record.name.clone(),
+        volume_unit: record.volume_unit,
         decimal_point: record.decimal_point(),
         pre_close: record.pre_close(),
     }

@@ -124,10 +124,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             if let Some(previous) = last_received_ms.insert(key, received_ms) {
                 intervals_ms.push(received_ms.saturating_sub(previous));
             }
-            if let Some(source_time) = record.time_hhmmss_raw {
-                if let Some(latency) = source_latency_ms(timed.received_at, source_time) {
-                    latencies_ms.push(latency);
-                }
+            if let Some(source_time) = record.time_hhmmss_raw
+                && let Some(latency) = source_latency_ms(timed.received_at, source_time)
+            {
+                latencies_ms.push(latency);
             }
         }
     }

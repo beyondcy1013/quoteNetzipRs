@@ -13,7 +13,7 @@ const STOCKDRV_REPORT_KIND: &[u8] = b"\xca\xb5\xca\xb1\xca\xfd\xbe\xdd RCV_REPOR
 
 const DEFAULT_GATEWAY: &str = "192.168.3.2:16886";
 
-pub(crate) struct PushQuote {
+pub struct PushQuote {
     pub instrument: String,
     pub name: String,
     pub timestamp: u32,
@@ -23,7 +23,7 @@ pub(crate) struct PushQuote {
     pub amount: f32,
 }
 
-pub(crate) fn encode_push_packet(quotes: &[PushQuote]) -> Result<Vec<u8>, String> {
+pub fn encode_push_packet(quotes: &[PushQuote]) -> Result<Vec<u8>, String> {
     let count = u32::try_from(quotes.len()).map_err(|_| "too many push quotes".to_owned())?;
     let mut packet = vec![0; STOCKDRV_CONTAINER_SIZE + STOCKDRV_REPORT_SIZE * quotes.len()];
     packet[0..4].copy_from_slice(&STOCKDRV_PUSH_MAGIC.to_le_bytes());

@@ -8,22 +8,24 @@ tmp_file="$(mktemp "$defaults_dir/.netzip-rs.XXXXXX")"
 trap 'rm -f "$tmp_file"' EXIT
 
 if [[ -f "$defaults_path" ]]; then
-    awk '!/^(NETZIP_FULL_PUSH_MODE|NETZIP_NATIVE_PUSH_PUBLISH_ENABLE|NETZIP_NATIVE_PUSH_SESSION_SECS|NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS)=/' \
+    awk '!/^(NETZIP_FULL_PUSH_MODE|NETZIP_FULL_PUSH_WORKERS|NETZIP_NATIVE_PUSH_PUBLISH_ENABLE|NETZIP_NATIVE_PUSH_SESSION_SECS|NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS|NETZIP_NATIVE_BJ_POLL_INTERVAL_SECS)=/' \
         "$defaults_path" >"$tmp_file"
 fi
 cat >>"$tmp_file" <<'EOF'
 NETZIP_FULL_PUSH_MODE=push
+NETZIP_FULL_PUSH_WORKERS=64
 NETZIP_NATIVE_PUSH_PUBLISH_ENABLE=1
 NETZIP_NATIVE_PUSH_SESSION_SECS=240
 NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS=30
+NETZIP_NATIVE_BJ_POLL_INTERVAL_SECS=3
 EOF
 install -m 0644 "$tmp_file" "$defaults_path"
 
 if [[ "${NETZIP_SKIP_RESTART:-0}" != "1" ]]; then
-    systemctl restart netzip-rs.service
-    systemctl restart netzip-rs-full-push.service
-    systemctl is-active --quiet netzip-rs.service
-    systemctl is-active --quiet netzip-rs-full-push.service
+    systemctl restart quote-netzip-rs-supplement.service
+    systemctl restart quote-netzip-rs-full-push.service
+    systemctl is-active --quiet quote-netzip-rs-supplement.service
+    systemctl is-active --quiet quote-netzip-rs-full-push.service
 fi
 
-grep -E '^(NETZIP_FULL_PUSH_MODE|NETZIP_NATIVE_PUSH_PUBLISH_ENABLE|NETZIP_NATIVE_PUSH_SESSION_SECS|NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS)=' "$defaults_path"
+grep -E '^(NETZIP_FULL_PUSH_MODE|NETZIP_FULL_PUSH_WORKERS|NETZIP_NATIVE_PUSH_PUBLISH_ENABLE|NETZIP_NATIVE_PUSH_SESSION_SECS|NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS|NETZIP_NATIVE_BJ_POLL_INTERVAL_SECS)=' "$defaults_path"

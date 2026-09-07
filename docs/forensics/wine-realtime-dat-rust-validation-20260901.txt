@@ -1,0 +1,156 @@
+quoteNetzipRs Wine realtime.dat validation
+Date: 2026-09-01 Asia/Shanghai
+
+Scope
+-----
+- Shared parser: /home/codes/stock/crates/netzip-supplement
+- HTTP endpoints: POST /api/supplement/realtime and POST /api/supplement/realtime/oem.
+- Responses: structured disk/raw getter JSON with 6,211 occupied slots, or the
+  dynamic Wine-compatible OEM_DATA_HEAD + 6,187 OEM_REPORT records.
+- No deployment, service start, or service restart was performed.
+
+Captured input used for the original bit-level validation
+-------------------
+- File: /home/codes/third_party/quoteNetzipWine/数据/实时.dat
+- Size: 32,540,094 bytes.
+- SHA-256:
+  1087ed23295ba855cc75cbb4e439b32babc30353cd5802b66169a9b78024bb88
+- Exporter executable: /home/codes/third_party/quoteNetzipWine/网际风.exe
+- Exporter SHA-256:
+  de712a8dde6d990e1c586f8afd4194575e35dffa2d0f81245fe29f6f8509bd29
+- Current exporter function: 0x4a7890.
+- Amount getter: 0x40acc0; derived-field dispatcher: 0x441070.
+
+Physical layout
+---------------
+- Offset 0 is a per-file/session header token. The original captured file contained
+  0x6bbbc9d0, while a refreshed 2026-09-01 file contains 0xf781aea6. Repository C#,
+  C++, and Python samples contain three other values, so this DWORD is not a fixed
+  magic. The JSON field remains named `magic` for compatibility only.
+- The current 250303 layout marker is the u32 at offset 4.
+- Fixed header: 195,216 bytes.
+- Slot size: 5,206 bytes.
+- Capacity: 6,213 slots.
+- Declared active records at file offset 8: 6,211.
+- Parsed active records: 6,211; the final two slots are empty.
+- First/last active symbols: SH000001 / SZ399242.
+- Every non-empty symbol must be SH/SZ/BJ plus six digits and must be unique.
+- Names are UTF-16LE in slot bytes 24..88 and stop at the first NUL.
+
+Getter offsets used by the parser
+---------------------------------
+- last/openDate/openTime/closeDate: 0x11e/0x122/0x126/0x12a.
+- limitUp/limitDown: 0x136/0x13a.
+- buy/sell volume change: 0x18b/0x19f, five f32 values each.
+- nowv/nowa/isBuy: 0x1b3/0x1b7/0x1bb.
+- compressed amount/time/high/low/close: 0x1e6/0x1f2/0x1f6/0x1fa/0x1fe.
+- volume/current volume: 0x206/0x20a.
+- buy price/buy volume storage: 0x212/0x252, exported with index (7-i).
+- sell price/sell volume storage: 0x232/0x272, exported in ascending index order.
+- open/jingJia/average price/tickNum: 0x292/0x2ab/0x2d6/0x2e2.
+
+Derived OEM rules
+-----------------
+- Price scale is 100 for 5,335 records and 1,000 for 876 records.
+- Amount mode is selected from slot bytes +0x2aa/+0x2ab: mode 0 has 158
+  records, mode 1 has 86, and mode 2 has 5,967.
+- Mode-0 tagged values follow exporter function 0x40ac30: clear bit 31,
+  widen to u64, shift left 16, then round to f32. This is distinct from the
+  TDX 7709 packed-number decoder. SH113624 0x8000b09c -> f32 bits 0x4f309c00;
+  SZ123118 0x80012077 -> f32 bits 0x4f903b80.
+- weiBi = (buy_raw - sell_raw) * 100 / (buy_raw + sell_raw), with zero
+  denominator returning zero.
+- liangBi = volume * (lot_adjustment + 1) /
+  (base_volume * (foot + 1)), with zero denominator returning zero.
+- change uses FIN metrics[35] for category 2 or 17, otherwise metrics[34],
+  and returns zero when finance is absent or the denominator is zero.
+- The object_09/object_04/current-category join covers 5,958 records. Rust
+  and Wine change f32 bits match for all 5,958. Another 321 records lack the
+  same-capture finance object and 19 lack current classification, so they were
+  excluded rather than inferred.
+
+Representative SH600000 evidence
+--------------------------------
+- Slot index: 547; name: 浦发银行.
+- time/openDate/openTime/closeDate:
+  1784876400 / 1784822400 / 1784856600 / 1784822400.
+- last/open/high/low/close raw:
+  905 / 908 / 912 / 902 / 904.
+- limitUp/limitDown raw: 996 / 815.
+- volume/current volume: 506751 / 70.
+- internal amount code: 261478384.
+- decoded amount f32 bits: 0x4ddb011a.
+- decoded change f32 bits: 0x3e1bcd6c.
+- nowv: 506751; nowa f32 bits: 1306198072.
+- sell prices: 904,905,906,907,908.
+- sell volumes: 206,888,918,6288,5408.
+- buy prices: 903,902,901,900,899.
+- buy volumes: 1202,11583,1081,2390,1314.
+- jingJia=false, average price raw=904, isBuy=0, tickNum=0.
+
+Compile and test evidence
+-------------------------
+- Valid parser GREEN request: 032726-18d0ccb5d58be473
+- Log: /home/bin/webclx/compile/runs/20260901T032731-409547-4186/build-1.log
+- Extended getter GREEN request: 033437-18d0ccb5d58be475
+- Log: /home/bin/webclx/compile/runs/20260901T033442-425192-26563/build-1.log
+- Shared crate regression request: 033652-18d0ccb5d58be476
+- Log: /home/bin/webclx/compile/runs/20260901T033657-430591-18113/build-1.log
+- Shared crate result: 11 passed, 0 failed, including malformed layout boundaries.
+- Service integration GREEN request: 034023-18d0ccb5d58be478
+- Log: /home/bin/webclx/compile/runs/20260901T034028-439367-29/build-1.log
+- Capability test request: 034253-18d0ccb5d58be479
+- Log: /home/bin/webclx/compile/runs/20260901T034258-445328-20527/build-1.log
+- OEM source fields and amount GREEN request: 040056-18d0ccb5d58be47e
+- weiBi/liangBi GREEN request: 040434-18d0ccb5d58be480
+- change/FIN join GREEN request: 040935-18d0ccb5d58be482
+- OEM service mapping GREEN request: 041527-18d0ccb5d58be485
+- Complete OEM loader GREEN request: 041837-18d0ccb5d58be487
+- Complete loader result: packet length 200 + 6,211 * 500, count 6,211;
+  SH600000 amount bits 0x4ddb011a and change bits 0x3e1bcd6c.
+- realtime/oem capability GREEN request: 041925-18d0ccb5d58be488
+- Final shared/codec/workspace/release request: 042544-18d0ccb5d58be489
+- Log: /home/bin/webclx/compile/runs/20260901T042549-547269-17495/build-1.log
+- Shared crate result: 13 passed, 0 failed.
+- Workspace result: 145 passed, 0 failed across non-empty test groups.
+- tuwenca-codec result: 13 passed, 0 failed.
+- Release artifact: target/release/quoteNetzipRs, 9,905,544 bytes.
+- Release SHA-256:
+  3b15833de2f0d1c2d7e6181ceedd24ec2267a0b72f7c3fcf71bfb4dea1dc1f60
+- Variable-token/layout-marker RED request: 054610-18d0ccb5d58be49f
+- Variable-token/layout-marker GREEN request: 054659-18d0ccb5d58be4a0
+- Stable synthetic-slot plus refreshed-file smoke regression: 055125-18d0ccb5d58be4a1
+- Refreshed runtime file SHA-256 observed during that regression:
+  9cdf5171bb2124927a3f67e11fedeae6e93e16e153f81c904b7b1f88f3b761b8
+- Final refreshed-file/workspace/release regression: 055533-18d0ccb5d58be4a3
+- Log: /home/bin/webclx/compile/runs/20260901T055538-812406-19581/build-1.log
+- Result: shared crate 13 passed, service 62 passed, all workspace non-empty
+  groups 151 passed, release build succeeded.
+- Dynamic initialization GREEN request: 070747-18d0ccb5d58be4c1
+- Log: /home/bin/webclx/compile/runs/20260901T070756-1246245-16987/build-1.log
+- Result: shared tagged-amount test and complete split/finance/file/realtime/
+  empty-realtime callbacks all passed byte-for-byte. Raw realtime retains all
+  6,211 occupied slots; OEM realtime excludes 24 time=0 slots and emits 6,187.
+- Rust 1.100.0-nightly dependency-upgrade regression: 072942-18d0ccb5d58be4cc
+- Log: /home/bin/webclx/compile/runs/20260901T072947-1394693-28019/build-1.log
+- Results: rustHq 56 passed; netzip-fullpull 50 passed; netzip-supplement 13
+  passed; all non-empty workspace groups passed; five dynamic callbacks passed.
+- Release artifact: target/release/quoteNetzipRs, 10,074,192 bytes.
+- Release SHA-256:
+  4b72c41edb781aec9a1427d08e6cfa7fae724af87062ea25adb03d8c5f0a6470
+- Tagged-amount incremental regression: 075108-18d0ccb5d58be4ce
+- Log: /home/bin/webclx/compile/runs/20260901T075113-1544206-6314/build-1.log
+- Result: the exact SH113624/SZ123118 tagged-amount test passed; shared
+  netzip-supplement formatting passed and all 13 tests passed on Rust
+  1.100.0-nightly.
+
+Boundary
+--------
+The disk parser keeps evidence-backed raw/getter fields separate from the OEM
+view. The captured object_09/object_10 codec fixtures, dynamic 6,187-record
+callback, amount modes, tagged fixed-point values, inVol,
+change, weiBi, liangBi, classification, complete loader, and HTTP capability are
+covered. The current file contains no jingJia=true record and no record matching
+the Wine volume +1 special case, so those disassembly-backed branches still need
+a dynamic fixture. Objects 06..08 and 11..15, complete initialization ordering,
+and live-market quality remain outside this closure.

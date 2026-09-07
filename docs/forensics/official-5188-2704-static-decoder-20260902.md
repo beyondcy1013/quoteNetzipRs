@@ -271,3 +271,188 @@ cargo +nightly build --example official_5188_extract
 The Rust commands are submitted through the webClx compile API. This evidence
 expires if the binary hash changes or an independent Wine fixture contradicts
 the stream boundary, token tables, record size or callback aggregation model.
+
+## 2026-09-03 M-token follow-up (request 151103)
+
+The M-token decoder was changed to Wine's observed signed-mantissa scaling by
+`16^exponent`. A subsequent direct control-flow check corrected mode 0: the
+branch at `0x44a09f` jumps to `0x44a101`, so it skips the volume/price
+projection and starts token decoding from zero; mode 8 retains the projection.
+The focused Rust suite passed (`167 passed, 0 failed, 1 ignored`; webClx log
+`/home/bin/webclx/logs/quoteNetzipRs/4057_build.log`).
+
+On the synchronized `open-capture-0937` replay, the rebuilt extractor produced
+45,249 frames: 37,655 `2704` frames, 24,181 decoded and 13,474 rejected. The
+current parity tool reported 313,631 decoded records, 271,950 callback matches,
+and 41,681 unmatched records. Field hits were: name 271,573; last-close
+55,965; timestamp 134,969; price 721; amount 291; volume 612. These are
+material improvements in coverage but not callback equivalence: price/amount/
+volume agreement remains sparse and mismatch samples show large value
+differences. Therefore M scaling is retained as evidence-backed, while the
+2704 decoder remains `needs-verification` and is not promoted to the public
+full-push business decoder.
+
+The 0104/core correlation then identified the complete metadata seed. Across
+31,053 same-symbol rows, `0104.opaque_tail[0]` matched internal `0x120` and
+`opaque_tail[1]` matched `0x121` in 99.8% of candidates; the remaining bytes
+follow the same contiguous layout through internal offset `0x136`. The Rust
+constructor now copies all 23 bytes to `0x120..0x137`, rather than guessing
+only exponent/multiplier. This supplies the reference-price bytes at `0x12b`
+needed by fresh OHLC and amount prediction. Live/cold replay remains the
+acceptance test; correlation alone does not promote business decoding.
+
+A no-core replay of the 08:12 cold-start fixture improved from zero to two
+decoded `2704` frames after the complete 0104 seed. All nine remaining frames
+stopped at the negative-amount guard with metadata mode zero. Wine's verified
+mode-zero amount representation uses a high-bit tagged encoding, so its signed
+intermediate is not subject to the ordinary non-negative invariant. Rust now
+retains tagged mode-zero values while continuing to reject negative ordinary
+amount accumulators in every other mode.
+
+With both corrections applied, the same no-core cold-start replay consumes all
+11/11 `2704` frames and all 1,619 indexed records using only the four 0104
+tables captured on that connection. No Wine memory/core snapshot is supplied.
+This is only structural evidence: spot checks still contain zero or implausible
+prices, proving 0104 metadata is not the missing market-value baseline.
+Publication remains disabled until that baseline is reconstructed and
+field-level callback parity passes.
+
+## 2026-09-03 0104 byte44 amount-mode replay check
+
+Build 162146 confirmed `0104 bytes[44] -> internal[0x11f]`, with fullpull 171 tests,
+Clippy `-D warnings`, and release build passing. Replaying
+`/home/codes/stock/netzip_win/diagnostics/20260903-linux-login/linux-login-20260903T081211.pcap`
+showed all 1,619 decoded records at mode 0 and every observed 0104 row's byte44 also 0
+(SH 26,485 / SZ 4,600 / BJ 790 / futures 742). Thus the metadata mapping is confirmed
+structurally, but this capture offers no discriminating non-zero mode evidence. It does
+not justify publication; same-time Wine callback parity remains required.
+
+## 2026-09-03 16:45 stale-core discriminating probe
+
+- No-core 14:15 replay: 0/3,048 frames because SZ index 2375 had no baseline;
+  this confirms cold-start 0104 metadata alone remains insufficient.
+- Stale 2026-09-02 core (`/tmp/wjf-frida-20260902.core`, 329,330 scanned
+  baselines) allowed 1,477/3,048 frames and 5,042 symbols to decode, proving
+  the stream structure is usable, but many outputs remained implausible
+  (zero, negative, or extreme prices). Cross-session baseline pollution is
+  therefore confirmed, and the stale core is not an acceptance baseline.
+- Fresh-path probe of the 08:12 fixture with the stale core failed at
+  `amount decoded as negative`, matching the already-recorded fresh amount
+  branch gap.
+
+## 2026-09-03 build-provenance correction
+
+The replay statements attributed to build 4064 above are not supported by its
+recorded command. That request built the fullpull tests, Clippy targets, and
+default release binaries, but omitted release examples. Build 4065 also ran
+only `cargo build --release`. The extractor, callback-parity tool, and live
+probe on disk all predated those requests. Consequently the 1,619-record cold
+replay and every output directory named `extract-4064` remain historical
+old-tool results until reproduced with hashed examples built explicitly via
+`--example`. The fullpull unit-test result still validates the source-level
+byte44 mapping; it does not validate replay behavior.
+
+### Verified replay after explicit example build (webClx 4067)
+
+Request `170424-18d1a65e45a96d23` passed 172 fullpull tests with 1 ignored, Clippy with
+`-D warnings`, and explicitly rebuilt all three release examples. The extractor
+SHA-256 was `8ceb14ac4ef07f1dee8da3bbb76928f7820936a2bb6e727488606d49e12cb9b1`.
+
+The rebuilt cold-start replay disproved the old result: it decoded 0/11 frames,
+not 11/11. The 32,617 code-table rows contain eleven observed byte44 values;
+only 1,364 are zero, while modes 1 and 3 account for 5,294 and 22,149 rows.
+SH `603059`, for example, has mode 1. Initial failures now report negative
+amount accumulators with mode 1. Thus byte44 is a discriminating field in this
+fixture, and its Wine semantics are not yet reconstructed.
+
+The rebuilt 09:37 and 14:15 replays produced 347/37,655 and 2/3,048 decoded
+frames respectively. Rebuilt callback parity matched 295 of 1,271 decoded
+09:37 records, with price 1, amount 0, and volume 14 field hits. These results
+confirm lack of business parity. Full hashes and counts are recorded in
+`diagnostics/20260903-verified-4067.md`.
+
+### Wine negative-amount guard correction
+
+Direct disassembly of `网际风.exe` `0x44a162..0x44a193` shows that Wine loads
+the optional baseline amount, performs the 64-bit addition, and writes the sum
+to internal offset `0x1c` for every raw mode. It has no signed non-negative
+guard. Rust's nonzero-mode rejection was therefore an analysis heuristic, not
+vendor behavior, and caused the verified 4067 cold replay to stop early.
+
+The decoder now retains Wine's wrapping internal representation for every
+mode. Public quote projection rejects any negative internal amount until the
+separate Wine amount conversion is reconstructed and parity-tested.
+
+## 2026-09-03 external 0104 seed provenance (4074)
+
+The 09:37 paired pcap contains no 0104 code-table frames, so the earlier
+`verified-4068` replay decoded with an empty metadata resolver. Its apparent
+347 successful frames were therefore not a valid field-decoder comparison.
+The extractor now accepts an explicit external 0104 directory and writes
+`seed-provenance.json`. Replaying the same pcap with the four tables from the
+same-day 08:12 authenticated lifecycle seeded 32,617 metadata records and
+produced:
+
+- 34,268 decoded 2704 frames and 581,997 decoded records;
+- 369,522 callback matches within 500 ms;
+- field hits: price 1,493, amount 286, volume 725, timestamp 278,647;
+- 3,387 rejected frames, primarily ladder token/bitstream errors.
+
+This is a material evidence-chain correction and improves coverage, but it is
+still not Wine parity: price, volume, amount, ladder and OHLC agreement remain
+sparse, and the metadata is from a separate lifecycle rather than the paired
+socket. Production publication remains disabled.
+
+## 2026-09-03 mapped-core replay (4075)
+
+The core loader now reads a sibling `.maps` file and scans each Wine memory
+mapping independently, rejecting candidates that cross mapping boundaries.
+Replaying the 14:15 fixture with `wine-rw-memory-1415.bin` and its 183-entry
+map retained the same result as the prior unsegmented scan: 1,948/3,048
+frames, 28,801 records, and 1,100 rejected frames. This negative result shows
+that cross-map candidate stitching was not the dominant source of the
+remaining failures. Lifecycle/state-table selection and codec bitstream
+divergence remain open; production promotion stays disabled.
+
+## 2026-09-03 endpoint/lifecycle separation finding
+
+The 14:15 pcap contains two independent server groups: `58.16.134.228:5188`
+and `222.85.139.177:5188`. The retained Wine memory dump represents one Wine
+process lifecycle and cannot be treated as a universal baseline for both
+groups. Current per-flow counts with the mapped-core replay are:
+
+| server flow | 2704 frames | decoded | errors |
+|---|---:|---:|---:|
+| `58.16.134.228:5188` | 2,937 | 1,870 | 1,047 |
+| `222.85.139.177:5188` | 131 | 78 | 53 |
+
+This concentration of failures in the alternate endpoint is consistent with
+cross-lifecycle baseline pollution, but is not proof of causality. Future
+parity runs must either supply a baseline captured from the same endpoint and
+session or report each endpoint independently; mixed-flow aggregate results
+must not be promoted as Wine equivalence.
+
+The 4078 extractor adds `DST_FILTER` and the split replay confirms the
+separation: the `58.16.134.228:5188` export (with Wine core) decoded
+1,870/2,917 value frames and rejected 1,047, while the independent
+`222.85.139.177:5188` export (without core) decoded 78/131 and rejected 53.
+Both exports used the same 32,617-row external 0104 seed. These numbers are
+now retained as endpoint-specific evidence rather than a mixed aggregate.
+The available callback JSONL is the separate 09:37 window, so the 14:15
+`222.85.139.177` export has zero callback matches and cannot be used for field
+parity; this is recorded as missing paired evidence, not as a successful or
+failed decoder comparison.
+
+## 2026-09-03 strict baseline provenance (4079)
+
+The resolver now tracks metadata seeds separately from complete decoded
+baseline records. `0104` rows remain available for amount/scale metadata, but
+cannot satisfy a `uses_baseline` relative value record. Only records inserted
+from a Wine core snapshot or decoded value pass are eligible baselines.
+
+The 09:37 replay with external 0104 metadata consequently reports 347
+non-relative records decoded and 37,308 baseline-required records rejected
+with an explicit `requires missing baseline` error. This replaces prior
+"decoded" pseudo-values generated from metadata-only state and is a correctness
+improvement. A same-session complete baseline is still required before field
+parity or publication.

@@ -1,0 +1,87 @@
+quoteNetzipRs OEM finance/FIN V8 validation
+Date: 2026-09-01 Asia/Shanghai
+
+Scope
+-----
+- Shared parser: /home/codes/stock/crates/netzip-supplement
+- OEM codec: crates/tuwenca-codec
+- HTTP endpoint: POST /api/supplement/finance/oem
+- No deployment or service restart was performed.
+
+Authoritative inputs
+--------------------
+- Wine worklist:
+  /home/codes/third_party/quoteNetzipWine/用户/只接收股票代码表.csv
+- Current dynamic FIN:
+  /home/codes/third_party/quoteNetzipWine/数据/财务V8.fin
+- Captured complete Wine object:
+  windows_debug/tmp_netzip_probe_20260329/
+  frida_ws2_trace_20260330_v16_init_full_2000_chunks/
+  outer_object_catalog/object_bins/object_04.bin
+- Captured finance inventory:
+  windows_debug/tmp_netzip_probe_20260329/
+  frida_ws2_trace_20260330_v16_object4_finance_full/parsed_finance/
+  summary.txt and finance.csv
+
+FIN V8 structure and selection
+------------------------------
+- Header magic: 0x223fd90e.
+- Record size: 224 bytes.
+- Current records: 6173, all standard SH/SZ/BJ plus six-digit symbols.
+- FIN record bytes 12..216 map to OEM time, bao_gao, shang_shi and 48 f32 metrics.
+- Current FIN/worklist intersection: 6153 records.
+- FIN-filtered worklist order and worklist-filtered FIN order are identical.
+- First/last output records: SH000001 / SZ399108.
+- Every old captured record found in current FIN has updated dynamic values; current FIN is the value authority rather than the old object.
+
+Captured Wine object fixture
+----------------------------
+- Captured records: 5993.
+- OEM record size: 350 bytes.
+- Payload bytes: 2097550; inner packet bytes including OEM_DATA_HEAD: 2097750.
+- The fixture reconstructs all 5993 snapshots from the complete captured object and compares the full inner packet.
+- UTF-16 bytes after the first NUL in fixed label/name slots are normalized to zero.
+- OEM_FINANCE temp[58] is also normalized based on cross-capture evidence:
+  - v15/v16 contain 5299 overlapping complete records;
+  - decoded label, name and bytes 88..292 are identical for all 5299 records;
+  - each capture repeats one temp template for every record, but the template differs between v15 and v16.
+- No date, metric or other business payload byte is normalized.
+
+Representative SH600000 current evidence
+----------------------------------------
+- name: 浦发银行
+- time: 20260828
+- bao_gao: 20260601
+- shang_shi: 19991110
+- metrics[0]: f32(0.89)
+- metrics[1]: f32(22.63)
+- metrics[11]: 10405354496
+- metrics[32]: 3330583.75
+
+Compile and test evidence
+-------------------------
+- webClx request: 024209-18d0ccb5d58be464
+- log: /home/bin/webclx/compile/runs/20260901T024214-298939-14034/build-1.log
+- netzip-supplement: 8 passed, 0 failed.
+- tuwenca-codec: 10 passed, 0 failed.
+- workspace test groups all completed with 0 failures.
+- release profile completed and target/release/quoteNetzipRs was present.
+
+Isolated HTTP validation
+------------------------
+- Process: target/release/quoteNetzipRs --listen 127.0.0.1:16894
+- Request body: {"ask_id":37}
+- HTTP: 200; Content-Type: application/octet-stream
+- Response bytes: 2153750.
+- OEM_DATA_HEAD: type=财务, name=财务数据, len=2153550, count=6153, ask_id=37.
+- First/last record: SH000001 / SZ399108.
+- SH600000 fields match the representative values above.
+- Nonzero temp bytes: 0.
+- SHA-256: 3593649ba414bb5707843b1ac702ec9242110db65a0c515e171c25e937d12624
+- The isolated process was stopped and port 16894 was confirmed closed.
+
+Boundary
+--------
+This closes the captured and current dynamic OEM finance object path only. File
+objects, remaining initialization sequencing, and intraday realtime quality remain
+separate work and are not claimed complete by this validation.

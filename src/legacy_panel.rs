@@ -1,6 +1,5 @@
 use crate::{
-    auth_credentials,
-    DownloadedServerConfig, ProtoProbeConfig, ProtoProbeEncoding,
+    DownloadedServerConfig, ProtoProbeConfig, ProtoProbeEncoding, auth_credentials,
     load_downloaded_server_config_sample, probe_proto,
 };
 use serde::{Deserialize, Serialize};
@@ -11,12 +10,12 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_DATA_HOST: &str = "120.195.71.160";
+pub const DEFAULT_DATA_HOST: &str = "";
 pub const DEFAULT_DATA_PORT: u16 = 7709;
 const AUTH_PROTOCOL_VERSION: &str = "20221120";
 const RUNTIME_STATE_REL: &str = "tmp/netzip_legacy_panel_state.json";
-const REFERENCE_CONFIG_REL: &str = "netzip_api_bin/NetzipAPI/StockC++/用户/配置文件.ini";
-const REFERENCE_SERVER_LIST_REL: &str = "netzip_api_bin/NetzipAPI/StockC++/用户/服务器列表.ini";
+const REFERENCE_CONFIG_REL: &str = "docs/netzip_api_bin/NetzipAPI/StockC++/用户/配置文件.ini";
+const REFERENCE_SERVER_LIST_REL: &str = "docs/netzip_api_bin/NetzipAPI/StockC++/用户/服务器列表.ini";
 const PROTOCOL_NOTE: &str =
     "当前 Linux Web 服务可加载配置、测速和端口连通性验证；真实 DLL 登录仍待协议封装。";
 
@@ -883,7 +882,9 @@ fn manifest_path(rel: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_reference_config, normalize_config, parse_key_values, split_comment, split_name_port};
+    use super::{
+        load_reference_config, normalize_config, parse_key_values, split_comment, split_name_port,
+    };
 
     #[test]
     fn parses_comment_and_name_port() {

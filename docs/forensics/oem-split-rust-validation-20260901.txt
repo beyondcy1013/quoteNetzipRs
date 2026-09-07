@@ -1,0 +1,86 @@
+quoteNetzipRs OEM split/PWR V8 validation
+Date: 2026-09-01 Asia/Shanghai
+
+Scope
+-----
+- Shared parser: /home/codes/stock/crates/netzip-supplement
+- OEM codec: crates/tuwenca-codec
+- HTTP endpoint: POST /api/supplement/split/oem
+- No deployment or service restart was performed.
+
+Authoritative inputs
+--------------------
+- Wine worklist:
+  /home/codes/third_party/quoteNetzipWine/用户/只接收股票代码表.csv
+- Current dynamic PWR:
+  /home/codes/third_party/quoteNetzipWine/数据/除权V8.pwr
+- Captured complete Wine object:
+  windows_debug/tmp_netzip_probe_20260329/
+  frida_ws2_trace_20260330_v16_init_full_2000_chunks/
+  outer_object_catalog/object_bins/object_03.bin
+- Captured object structure:
+  windows_debug/tmp_netzip_probe_20260329/
+  frida_ws2_trace_20260330_v15_object3_split_full/parsed_split_full/
+  groups.csv and splits.csv
+
+PWR V8 structure and selection
+------------------------------
+- File label parsing starts at byte 12.
+- Group label: 8 ASCII bytes; event count: u16 at group offset +14.
+- The next group label advances by (event_count + 1) * 120 bytes.
+- Event values start at group offset + 120 * (index + 1).
+- The event time is the u32 immediately before those values.
+- Current physical PWR: 6535 groups and 65995 events.
+- Standard SH/SZ/BJ plus six-digit groups: 6512 groups and 65921 events.
+- Nonstandard suffix-code groups: 23 groups and 74 events; excluded from six-digit joins.
+- Current PWR/worklist intersection in worklist order: 5614 groups and 60633 events.
+- First/last output groups: SH510050 / SZ302132.
+
+Captured Wine object fixture
+----------------------------
+- Captured groups: 5224.
+- Captured events: 54376.
+- OEM 200-byte units: 59600.
+- Payload bytes: 11920000; inner packet bytes including OEM_DATA_HEAD: 11920200.
+- The test reconstructs all group and event snapshots and compares the complete inner packet.
+- Only bytes after the first UTF-16 NUL in fixed string slots are normalized to zero.
+- All other bytes compare exactly.
+- Captured OEM_SPLIT_HEAD.volume and 106-byte temp fields are zero.
+- Captured OEM_SPLIT.explain fields are empty; current encoder intentionally emits empty explain fields even when current PWR contains explanatory text.
+
+Representative SH600000 evidence
+--------------------------------
+- Current group event count: 27.
+- Event 1: time=962812800 give=0 allocate=0 price=0 earnings=f32(0.15).
+- Event 2: time=1029945600 give=f32(0.5) allocate=0 price=0 earnings=f32(0.2).
+- The old captured object contains the same first 26-event sequence.
+
+Compile and test evidence
+-------------------------
+- webClx request: 022141-18d0ccb5d58be45b
+- log: /home/bin/webclx/compile/runs/20260901T022146-247669-2387/build-1.log
+- netzip-supplement: 7 passed, 0 failed.
+- tuwenca-codec: 9 passed, 0 failed.
+- workspace test groups all completed with 0 failures.
+- release profile completed and target/release/quoteNetzipRs was present.
+
+Isolated HTTP validation
+------------------------
+- Process: target/release/quoteNetzipRs --listen 127.0.0.1:16894
+- Request body: {"ask_id":31}
+- HTTP: 200; Content-Type: application/octet-stream
+- Response bytes: 13249600.
+- OEM_DATA_HEAD: type=除权, name=除权数据, len=13249400, count=66247, ask_id=31.
+- Parsed groups/events: 5614 / 60633; units=66247.
+- First/last group: SH510050 / SZ302132.
+- SH600000: name=浦发银行, events=27, first_time=962812800, second_time=1029945600.
+- Nonzero group temp bytes: 0.
+- Nonzero event explain bytes: 0.
+- SHA-256: 422a578df6cc39f6ae50f15f350864239ea8696f7e12841db0f981c683a09da1
+- The isolated process was stopped and port 16894 was confirmed closed.
+
+Boundary
+--------
+This closes the captured and current dynamic OEM split object path only. Finance,
+file objects, remaining initialization sequencing, and intraday realtime quality
+remain separate work and are not claimed complete by this validation.

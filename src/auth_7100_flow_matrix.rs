@@ -1,10 +1,11 @@
 use crate::auth_flow_sample::Auth7100ZstdFrameSummary;
 use crate::capture_input::read_capture_file_as_pcap_bytes;
 use crate::{Auth7100PrefixHints, summarize_auth_7100_prefix_hints};
+use encoding_rs::GBK;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::net::Ipv4Addr;
 use std::path::Path;
 use zstd::stream::decode_all as zstd_decode_all;
@@ -12,6 +13,8 @@ use zstd::stream::decode_all as zstd_decode_all;
 const NET_PACKET_PREFIX_LEN: usize = 74;
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 const SAMPLE_PCAP_REL: &str = "tmp/netzip_full_tcp.pcap";
+const STOCK_DICTIONARY_BYTES: &[u8] =
+    include_bytes!("../docs/netzip_api_bin/NetzipAPI/StockC++/Stock.字典");
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Auth7100FlowMatrix {
@@ -46,15 +49,45 @@ pub struct Auth7100FlowPacket {
     pub field_56: u32,
     pub field_hints: Auth7100PrefixHints,
     pub packet_role: String,
+    pub inflated_root_name: Option<String>,
+    pub inflated_header_words: Option<[u32; 5]>,
     pub inflated_object_name: Option<String>,
     pub inflated_tail: Option<String>,
     pub inflated_field_hints: Option<Auth7100PrefixHints>,
+    pub inflated_len: Option<usize>,
+    pub inflated_fields: Vec<Auth7100DecodedField>,
     pub contains_penc_ascii: bool,
     pub penc_offsets: Vec<usize>,
     pub hypenc_offsets: Vec<usize>,
     pub utf16_strings: Vec<String>,
     pub ascii_strings: Vec<String>,
     pub zstd_frame: Option<Auth7100ZstdFrameSummary>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct Auth7100DecodedField {
+    pub offset: usize,
+    pub type_id: u32,
+    pub value_len: usize,
+    pub value_crc32: Option<u32>,
+    pub field_12: u32,
+    pub span_len: usize,
+    pub label: String,
+    pub sensitive: bool,
+    pub value_first_nul: Option<usize>,
+    pub value_visible_ascii_bytes: usize,
+    pub value_visible_ascii_runs: Vec<[usize; 2]>,
+    pub value_gbk_decode_ok: bool,
+    pub value_gbk_character_count: Option<usize>,
+    pub value_crlf_count: usize,
+    pub value_non_ascii_bytes: usize,
+    pub value_other_control_bytes: usize,
+    pub value_line_lengths: Vec<usize>,
+    pub value_line_shapes: Vec<String>,
+    pub value_schema_labels: Vec<String>,
+    pub value_penc_offsets: Vec<usize>,
+    pub value_hypenc_offsets: Vec<usize>,
+    pub value_zstd_offsets: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -126,10 +159,19 @@ pub fn analyze_auth_7100_flow_matrix_sample() -> Result<Auth7100FlowMatrix, Box<
 pub fn analyze_auth_7100_flow_matrix(
     path: impl AsRef<Path>,
 ) -> Result<Auth7100FlowMatrix, Box<dyn Error>> {
+    analyze_auth_flow_matrix_for_port(path, 7100)
+}
+
+/// Analyze the shared authenticated envelope on a selected TCP service port.
+/// The historical 7100 API remains the compatibility wrapper above.
+pub fn analyze_auth_flow_matrix_for_port(
+    path: impl AsRef<Path>,
+    service_port: u16,
+) -> Result<Auth7100FlowMatrix, Box<dyn Error>> {
     let path = path.as_ref();
     let bytes = read_capture_file_as_pcap_bytes(path)?;
     let parsed = parse_pcap(&bytes)?;
-    let (local_host, server) = discover_7100_endpoints(&parsed)?;
+    let (local_host, server) = discover_service_endpoints(&parsed, service_port)?;
     let mut seen = HashSet::new();
     let mut sessions = BTreeMap::<Endpoint, SessionPackets>::new();
 
@@ -204,12 +246,15 @@ pub fn analyze_auth_7100_flow_matrix(
     })
 }
 
-fn discover_7100_endpoints(packets: &[TcpPacket]) -> Result<(Ipv4Addr, Endpoint), Box<dyn Error>> {
+fn discover_service_endpoints(
+    packets: &[TcpPacket],
+    service_port: u16,
+) -> Result<(Ipv4Addr, Endpoint), Box<dyn Error>> {
     let mut candidates = BTreeMap::<(Ipv4Addr, Endpoint), usize>::new();
     for packet in packets {
-        let candidate = if packet.src.port == 7100 {
+        let candidate = if packet.src.port == service_port {
             Some((packet.dst.ip, packet.src))
-        } else if packet.dst.port == 7100 {
+        } else if packet.dst.port == service_port {
             Some((packet.src.ip, packet.dst))
         } else {
             None
@@ -222,7 +267,7 @@ fn discover_7100_endpoints(packets: &[TcpPacket]) -> Result<(Ipv4Addr, Endpoint)
         .into_iter()
         .max_by_key(|(_, packet_count)| *packet_count)
         .map(|(candidate, _)| candidate)
-        .ok_or_else(|| "capture contains no TCP/7100 packets".into())
+        .ok_or_else(|| format!("capture contains no TCP/{service_port} packets").into())
 }
 
 fn classify_session(
@@ -275,8 +320,13 @@ fn analyze_netpacket(
 ) -> Auth7100FlowPacket {
     let raw_utf16_strings = scan_utf16_strings(packet_bytes, 2);
     let raw_ascii_strings = scan_ascii_strings(packet_bytes, 4);
+    let uses_stock_dictionary = prefix.field_44 == 12;
     let zstd_frame = find_zstd(packet_bytes).map(|zstd_magic_offset| {
-        summarize_zstd_frame(&packet_bytes[zstd_magic_offset..], zstd_magic_offset)
+        summarize_zstd_frame(
+            &packet_bytes[zstd_magic_offset..],
+            zstd_magic_offset,
+            uses_stock_dictionary,
+        )
     });
     let inflated = zstd_frame.as_ref().and_then(|frame| {
         if !frame.decode_ok {
@@ -286,14 +336,31 @@ fn analyze_netpacket(
             packet_bytes,
             frame.zstd_magic_offset,
             frame.declared_frame_len,
+            uses_stock_dictionary,
         )
     });
     let inflated_prefix = inflated
         .as_deref()
         .and_then(|inflated| parse_netpacket_prefix(inflated.get(..NET_PACKET_PREFIX_LEN)?));
+    let inflated_root_name = inflated
+        .as_deref()
+        .and_then(|bytes| decode_utf16_z(bytes.get(..20)?));
+    let inflated_header_words = inflated.as_deref().and_then(|bytes| {
+        Some([
+            u32::from_le_bytes(bytes.get(20..24)?.try_into().ok()?),
+            u32::from_le_bytes(bytes.get(24..28)?.try_into().ok()?),
+            u32::from_le_bytes(bytes.get(28..32)?.try_into().ok()?),
+            u32::from_le_bytes(bytes.get(32..36)?.try_into().ok()?),
+            u32::from_le_bytes(bytes.get(36..40)?.try_into().ok()?),
+        ])
+    });
     let inflated_utf16_strings = inflated
         .as_deref()
         .map(|inflated| scan_utf16_strings(inflated, 2))
+        .unwrap_or_default();
+    let inflated_fields = inflated
+        .as_deref()
+        .map(scan_structured_fields)
         .unwrap_or_default();
     let packet_role = classify_packet(prefix, inflated_prefix.as_ref(), &inflated_utf16_strings);
     let penc_offsets = find_all_literals(packet_bytes, b"penc");
@@ -320,6 +387,8 @@ fn analyze_netpacket(
             prefix.field_56,
         ),
         packet_role,
+        inflated_root_name,
+        inflated_header_words,
         inflated_object_name: inflated_prefix
             .as_ref()
             .map(|item| item.object_name.clone()),
@@ -337,15 +406,17 @@ fn analyze_netpacket(
                 item.field_56,
             )
         }),
+        inflated_len: inflated.as_ref().map(Vec::len),
+        inflated_fields,
         contains_penc_ascii: !penc_offsets.is_empty(),
         penc_offsets,
         hypenc_offsets,
-        utf16_strings: if !inflated_utf16_strings.is_empty() {
+        utf16_strings: redact_sensitive_strings(if !inflated_utf16_strings.is_empty() {
             inflated_utf16_strings
         } else {
             raw_utf16_strings
-        },
-        ascii_strings: raw_ascii_strings,
+        }),
+        ascii_strings: redact_sensitive_strings(raw_ascii_strings),
         zstd_frame,
     }
 }
@@ -384,13 +455,18 @@ fn decode_exact_zstd(
     bytes: &[u8],
     zstd_magic_offset: usize,
     declared_frame_len: usize,
+    uses_stock_dictionary: bool,
 ) -> Option<Vec<u8>> {
     let end = zstd_magic_offset.checked_add(declared_frame_len)?;
     let exact = bytes.get(zstd_magic_offset..end)?;
-    zstd_decode_all(Cursor::new(exact)).ok()
+    decode_zstd(exact, uses_stock_dictionary).ok()
 }
 
-fn summarize_zstd_frame(bytes: &[u8], zstd_magic_offset: usize) -> Auth7100ZstdFrameSummary {
+fn summarize_zstd_frame(
+    bytes: &[u8],
+    zstd_magic_offset: usize,
+    uses_stock_dictionary: bool,
+) -> Auth7100ZstdFrameSummary {
     let frame_descriptor = *bytes.get(4).unwrap_or(&0);
     let single_segment = frame_descriptor & 0x20 != 0;
     let content_checksum = frame_descriptor & 0x04 != 0;
@@ -466,7 +542,7 @@ fn summarize_zstd_frame(bytes: &[u8], zstd_magic_offset: usize) -> Auth7100ZstdF
         + usize::from(content_checksum) * 4;
     let trailing_bytes = bytes.len().saturating_sub(declared_frame_len);
     let exact = bytes.get(..declared_frame_len).unwrap_or(bytes);
-    let decode = zstd_decode_all(Cursor::new(exact));
+    let decode = decode_zstd(exact, uses_stock_dictionary);
 
     Auth7100ZstdFrameSummary {
         zstd_magic_offset,
@@ -486,6 +562,278 @@ fn summarize_zstd_frame(bytes: &[u8], zstd_magic_offset: usize) -> Auth7100ZstdF
         decode_ok: decode.is_ok(),
         decode_error: decode.err().map(|err| err.to_string()),
     }
+}
+
+fn decode_zstd(bytes: &[u8], uses_stock_dictionary: bool) -> Result<Vec<u8>, std::io::Error> {
+    if !uses_stock_dictionary {
+        return zstd_decode_all(Cursor::new(bytes));
+    }
+    let mut decoder =
+        zstd::stream::read::Decoder::with_dictionary(Cursor::new(bytes), STOCK_DICTIONARY_BYTES)?
+            .single_frame();
+    let mut decoded = Vec::new();
+    decoder.read_to_end(&mut decoded)?;
+    Ok(decoded)
+}
+
+fn redact_sensitive_strings(strings: Vec<String>) -> Vec<String> {
+    let mut redact_next = false;
+    strings
+        .into_iter()
+        .map(|value| {
+            if redact_next {
+                redact_next = false;
+                return "<redacted>".to_string();
+            }
+            if is_sensitive_label(value.trim()) {
+                redact_next = true;
+            }
+            value
+        })
+        .collect()
+}
+
+fn scan_structured_fields(bytes: &[u8]) -> Vec<Auth7100DecodedField> {
+    let mut fields = Vec::new();
+    let mut offset = 0usize;
+    while offset + 22 <= bytes.len() {
+        let type_id = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+        let value_len =
+            u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        let field_12 = u32::from_le_bytes(bytes[offset + 12..offset + 16].try_into().unwrap());
+        let span_len =
+            u32::from_le_bytes(bytes[offset + 16..offset + 20].try_into().unwrap()) as usize;
+        if !(1..=16).contains(&type_id)
+            || bytes[offset + 8..offset + 12] != [0; 4]
+            || span_len < 22 + value_len
+            || offset + span_len > bytes.len()
+        {
+            offset += 2;
+            continue;
+        }
+        let label_bytes = &bytes[offset + 20..offset + span_len];
+        let Some(label_end) = label_bytes
+            .chunks_exact(2)
+            .position(|chunk| chunk == [0, 0])
+            .map(|word| word * 2)
+        else {
+            offset += 2;
+            continue;
+        };
+        let label = decode_utf16_z(&label_bytes[..label_end + 2]).unwrap_or_default();
+        let value_start = offset + 20 + label_end + 2;
+        if label.is_empty()
+            || !label.encode_utf16().all(is_visible_utf16)
+            || value_start + value_len + 2 > offset + span_len
+        {
+            offset += 2;
+            continue;
+        }
+        let sensitive = is_sensitive_label(&label);
+        let value = &bytes[value_start..value_start + value_len];
+        let value_crc32 = (!sensitive && value_len > 0).then(|| crc32fast::hash(value));
+        fields.push(Auth7100DecodedField {
+            offset,
+            type_id,
+            value_len,
+            value_crc32,
+            field_12,
+            span_len,
+            sensitive,
+            label,
+            value_first_nul: (!sensitive)
+                .then(|| value.iter().position(|byte| *byte == 0))
+                .flatten(),
+            value_visible_ascii_bytes: if sensitive {
+                0
+            } else {
+                value
+                    .iter()
+                    .filter(|byte| byte.is_ascii_graphic() || **byte == b' ')
+                    .count()
+            },
+            value_visible_ascii_runs: if sensitive {
+                Vec::new()
+            } else {
+                visible_ascii_runs(value)
+            },
+            value_gbk_decode_ok: if sensitive {
+                false
+            } else {
+                !GBK.decode_without_bom_handling(value).1
+            },
+            value_gbk_character_count: if sensitive {
+                None
+            } else {
+                let (decoded, had_errors) = GBK.decode_without_bom_handling(value);
+                (!had_errors).then(|| decoded.chars().count())
+            },
+            value_crlf_count: if sensitive {
+                0
+            } else {
+                value.windows(2).filter(|pair| *pair == b"\r\n").count()
+            },
+            value_non_ascii_bytes: if sensitive {
+                0
+            } else {
+                value.iter().filter(|byte| !byte.is_ascii()).count()
+            },
+            value_other_control_bytes: if sensitive {
+                0
+            } else {
+                value
+                    .iter()
+                    .filter(|byte| byte.is_ascii_control() && !matches!(**byte, b'\r' | b'\n'))
+                    .count()
+            },
+            value_line_lengths: if sensitive {
+                Vec::new()
+            } else {
+                value
+                    .split(|byte| *byte == b'\n')
+                    .map(|line| line.strip_suffix(b"\r").unwrap_or(line).len())
+                    .collect()
+            },
+            value_line_shapes: if sensitive {
+                Vec::new()
+            } else {
+                value
+                    .split(|byte| *byte == b'\n')
+                    .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+                    .map(ascii_line_shape)
+                    .collect()
+            },
+            value_schema_labels: if sensitive {
+                Vec::new()
+            } else {
+                ascii_schema_labels(value)
+            },
+            value_penc_offsets: if sensitive {
+                Vec::new()
+            } else {
+                find_all_literals(value, b"penc")
+            },
+            value_hypenc_offsets: if sensitive {
+                Vec::new()
+            } else {
+                find_all_literals(value, b"hypenc")
+            },
+            value_zstd_offsets: if sensitive {
+                Vec::new()
+            } else {
+                find_all_literals(value, &ZSTD_MAGIC)
+            },
+        });
+        offset += span_len;
+    }
+    fields
+}
+
+fn visible_ascii_runs(bytes: &[u8]) -> Vec<[usize; 2]> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (offset, byte) in bytes.iter().chain(std::iter::once(&0)).enumerate() {
+        let visible = byte.is_ascii_graphic() || *byte == b' ';
+        match (start, visible) {
+            (None, true) => start = Some(offset),
+            (Some(run_start), false) => {
+                if offset - run_start >= 4 {
+                    runs.push([run_start, offset]);
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    runs
+}
+
+fn ascii_line_shape(line: &[u8]) -> String {
+    let mut shape = String::new();
+    let mut offset = 0usize;
+    while offset < line.len() {
+        let byte = line[offset];
+        let class = if byte.is_ascii_alphabetic() {
+            Some('L')
+        } else if byte.is_ascii_digit() {
+            Some('D')
+        } else {
+            None
+        };
+        if let Some(class) = class {
+            let start = offset;
+            while offset < line.len()
+                && if class == 'L' {
+                    line[offset].is_ascii_alphabetic()
+                } else {
+                    line[offset].is_ascii_digit()
+                }
+            {
+                offset += 1;
+            }
+            shape.push(class);
+            shape.push_str(&(offset - start).to_string());
+        } else {
+            shape.push(char::from(byte));
+            offset += 1;
+        }
+    }
+    shape
+}
+
+fn ascii_schema_labels(bytes: &[u8]) -> Vec<String> {
+    let mut labels = Vec::new();
+    for raw_line in bytes.split(|byte| *byte == b'\n') {
+        let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+        let Ok(text) = std::str::from_utf8(line) else {
+            continue;
+        };
+        if let Some((key, _)) = text.split_once('=') {
+            if is_schema_identifier(key) {
+                labels.push(format!("key:{key}"));
+            }
+            continue;
+        }
+        if text.starts_with('<') && text.ends_with('>') {
+            let tag = text.trim_matches(['<', '>', '/']);
+            if is_schema_identifier(tag) {
+                labels.push(format!("tag:{tag}"));
+            }
+            continue;
+        }
+        if let Some((path, _)) = text.split_once('|') {
+            if path.starts_with(".//") && path.bytes().all(is_schema_path_byte) {
+                labels.push(format!("path:{path}"));
+                continue;
+            }
+            if !text.bytes().any(|byte| byte.is_ascii_digit()) {
+                for column in text.split('|').filter(|column| !column.is_empty()) {
+                    if is_schema_identifier(column) {
+                        labels.push(format!("column:{column}"));
+                    }
+                }
+            }
+        }
+    }
+    labels
+}
+
+fn is_schema_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+}
+
+fn is_schema_path_byte(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'.' | b'/')
+}
+
+fn is_sensitive_label(label: &str) -> bool {
+    matches!(
+        label,
+        "账号" | "密码" | "用户ID" | "本地IP" | "网卡MAC" | "客户标识" | "账号到期"
+    )
 }
 
 fn parse_netpacket_prefix(bytes: &[u8]) -> Option<NetPacketPrefix> {
@@ -720,15 +1068,22 @@ fn parse_tcp_packet(
     _ts_frac: u32,
     _scale: TimestampScale,
 ) -> Option<TcpPacket> {
-    if frame.len() < 14 {
-        return None;
-    }
-    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
-    if ethertype != 0x0800 {
-        return None;
-    }
-
-    let ip = &frame[14..];
+    let ip = if frame.first().is_some_and(|byte| byte >> 4 == 4) {
+        frame
+    } else if frame.len() >= 14 && u16::from_be_bytes([frame[12], frame[13]]) == 0x0800 {
+        &frame[14..]
+    } else {
+        let offset = (0..=frame.len().saturating_sub(40).min(64)).find(|offset| {
+            let candidate = &frame[*offset..];
+            if candidate[0] >> 4 != 4 || candidate[9] != 6 {
+                return false;
+            }
+            let ihl = usize::from(candidate[0] & 0x0f) * 4;
+            let total_len = usize::from(u16::from_be_bytes([candidate[2], candidate[3]]));
+            ihl >= 20 && total_len >= ihl + 20 && candidate.len() >= total_len
+        })?;
+        &frame[offset..]
+    };
     if ip.len() < 20 {
         return None;
     }
@@ -789,7 +1144,13 @@ fn display_ep(endpoint: Endpoint) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze_auth_7100_flow_matrix, analyze_auth_7100_flow_matrix_sample};
+    use super::{
+        TimestampScale, analyze_auth_7100_flow_matrix, analyze_auth_7100_flow_matrix_sample,
+        analyze_netpackets, ascii_line_shape, parse_tcp_packet, redact_sensitive_strings,
+    };
+    use crate::auth_7100_client::{
+        build_auth_7100_followup_download_packet, build_auth_7100_login_packet,
+    };
 
     #[test]
     fn summarizes_probe_and_login_sessions_from_sample_pcap() {
@@ -894,6 +1255,166 @@ mod tests {
                 .map(|packet| packet.packet_len)
                 .collect::<Vec<_>>(),
             vec![443, 1540, 395]
+        );
+    }
+
+    #[test]
+    #[ignore = "reads the local credential-bearing vendor capture without logging values"]
+    fn verifies_vendor_pm_initial_login_manifest_shape() {
+        let path = crate::repository_fixture_path(
+            "diagnostics/20260831-netzip-windows-vs-rust/captures/vendor_pm.pcapng",
+        );
+        let matrix =
+            super::analyze_auth_flow_matrix_for_port(&path, 7100).expect("analyze vendor capture");
+        let login = matrix
+            .sessions
+            .iter()
+            .find(|session| session.local_endpoint == "198.18.0.1:3091")
+            .expect("vendor login session");
+        let first = login.client_packets.first().expect("initial manifest");
+        assert_eq!(first.packet_len, 632);
+        assert_eq!(first.inflated_len, Some(854));
+        assert_eq!(first.inflated_header_words, Some([19, 0, 0, 854, 854]));
+        assert!(
+            first
+                .inflated_fields
+                .iter()
+                .any(|field| field.label == "账号")
+        );
+        assert!(
+            first
+                .inflated_fields
+                .iter()
+                .any(|field| field.label == "密码")
+        );
+    }
+
+    #[test]
+    fn decodes_stock_dictionary_followup_in_flow_matrix() {
+        let packet = build_auth_7100_followup_download_packet(1).expect("followup packet");
+        let packets = analyze_netpackets(&packet);
+        assert_eq!(packets.len(), 1);
+        let summary = &packets[0];
+        assert_eq!(summary.field_44, 12);
+        assert!(summary.zstd_frame.as_ref().expect("zstd frame").decode_ok);
+        assert_eq!(summary.inflated_len, Some(130));
+        assert_eq!(summary.inflated_root_name.as_deref(), Some("下载文件"));
+        assert_eq!(summary.inflated_header_words, Some([2, 0, 0, 130, 130]));
+        assert!(summary.inflated_field_hints.is_none());
+        assert!(
+            summary
+                .inflated_fields
+                .iter()
+                .any(|field| field.label == "编号" && field.value_len == 4 && field.field_12 == 3)
+        );
+        assert!(
+            summary
+                .utf16_strings
+                .iter()
+                .any(|value| value == "下载文件")
+        );
+    }
+
+    #[test]
+    fn parses_pktmon_bare_ipv4_tcp_packet() {
+        let mut frame = vec![0u8; 40];
+        frame[0] = 0x45;
+        frame[2..4].copy_from_slice(&40u16.to_be_bytes());
+        frame[9] = 6;
+        frame[12..16].copy_from_slice(&[198, 18, 0, 1]);
+        frame[16..20].copy_from_slice(&[121, 41, 70, 217]);
+        frame[20..22].copy_from_slice(&3091u16.to_be_bytes());
+        frame[22..24].copy_from_slice(&7100u16.to_be_bytes());
+        frame[32] = 5 << 4;
+        frame[33] = 0x18;
+
+        let packet = parse_tcp_packet(&frame, 40, 40, 0, 0, TimestampScale::Micros)
+            .expect("bare IPv4 packet");
+        assert_eq!(packet.src.port, 3091);
+        assert_eq!(packet.dst.port, 7100);
+    }
+
+    #[test]
+    fn parses_prefixed_bare_ipv4_tcp_packet() {
+        let mut frame = vec![0xa5u8; 24];
+        frame.extend_from_slice(&[0x45, 0, 0, 40, 0, 0, 0, 0, 64, 6, 0, 0]);
+        frame.extend_from_slice(&[198, 18, 0, 1, 121, 41, 70, 217]);
+        frame.extend_from_slice(&3091u16.to_be_bytes());
+        frame.extend_from_slice(&7100u16.to_be_bytes());
+        frame.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 2, 0x50, 0x18, 0, 0, 0, 0, 0, 0]);
+        let packet = parse_tcp_packet(
+            &frame,
+            frame.len() as u32,
+            frame.len() as u32,
+            0,
+            0,
+            TimestampScale::Micros,
+        )
+        .expect("prefixed bare IPv4 packet");
+        assert_eq!(packet.src.port, 3091);
+        assert_eq!(packet.dst.port, 7100);
+    }
+
+    #[test]
+    fn redacts_values_after_credential_labels() {
+        assert_eq!(
+            redact_sensitive_strings(vec![
+                "账号".to_string(),
+                "ACCOUNT_VALUE".to_string(),
+                "密码".to_string(),
+                "PASSWORD_VALUE".to_string(),
+                "登录".to_string(),
+            ]),
+            vec!["账号", "<redacted>", "密码", "<redacted>", "登录"]
+        );
+    }
+
+    #[test]
+    fn line_shape_never_retains_alphanumeric_content() {
+        assert_eq!(ascii_line_shape(b"Server_12=AB9:80"), "L6_D2=L2D1:D2");
+    }
+
+    #[test]
+    fn structured_field_catalog_never_contains_values() {
+        let packet =
+            build_auth_7100_login_packet("ACCOUNT_VALUE", "PASSWORD_VALUE").expect("login packet");
+        let packets = analyze_netpackets(&packet);
+        let fields = &packets[0].inflated_fields;
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.label == "账号" && field.sensitive)
+        );
+        for field in fields.iter().filter(|field| field.sensitive) {
+            assert_eq!(field.value_crc32, None);
+            assert_eq!(field.value_first_nul, None);
+            assert_eq!(field.value_visible_ascii_bytes, 0);
+            assert!(field.value_visible_ascii_runs.is_empty());
+            assert!(!field.value_gbk_decode_ok);
+            assert_eq!(field.value_gbk_character_count, None);
+            assert_eq!(field.value_crlf_count, 0);
+            assert_eq!(field.value_non_ascii_bytes, 0);
+            assert_eq!(field.value_other_control_bytes, 0);
+            assert!(field.value_line_lengths.is_empty());
+            assert!(field.value_line_shapes.is_empty());
+            assert!(field.value_schema_labels.is_empty());
+            assert!(field.value_penc_offsets.is_empty());
+            assert!(field.value_hypenc_offsets.is_empty());
+            assert!(field.value_zstd_offsets.is_empty());
+        }
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.label == "密码" && field.sensitive)
+        );
+        let serialized = serde_json::to_string(fields).expect("serialize fields");
+        assert!(!serialized.contains("ACCOUNT_VALUE"));
+        assert!(!serialized.contains("PASSWORD_VALUE"));
+        assert!(
+            fields
+                .iter()
+                .filter(|field| field.sensitive)
+                .all(|field| field.value_crc32.is_none())
         );
     }
 }

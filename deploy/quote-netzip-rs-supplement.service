@@ -1,0 +1,19 @@
+[Unit]
+Description=quoteNetzipRs Rust supplement and compatibility service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/bin/netzip
+Environment=NETZIP_SERVICE_LISTEN=0.0.0.0:16893
+Environment=MALLOC_ARENA_MAX=4
+EnvironmentFile=-/etc/default/netzip-rs
+ExecStart=/home/bin/netzip/quoteNetzipRs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

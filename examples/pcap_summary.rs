@@ -256,15 +256,8 @@ fn parse_pcap(bytes: &[u8]) -> Result<Vec<TcpPacket>, Box<dyn Error>> {
         let frame = &bytes[offset..offset + incl_len_usize];
         offset += incl_len_usize;
 
-        let Some(packet) = parse_tcp_packet(
-            frame,
-            incl_len,
-            orig_len,
-            ts_sec,
-            ts_frac,
-            scale,
-            link_type,
-        )
+        let Some(packet) =
+            parse_tcp_packet(frame, incl_len, orig_len, ts_sec, ts_frac, scale, link_type)
         else {
             continue;
         };
@@ -302,8 +295,8 @@ fn parse_tcp_packet(
     link_type: u32,
 ) -> Option<TcpPacket> {
     let (network_offset, protocol_offset) = match link_type {
-        1 => (14usize, 12usize),   // DLT_EN10MB
-        276 => (20usize, 0usize),  // DLT_LINUX_SLL2
+        1 => (14usize, 12usize),  // DLT_EN10MB
+        276 => (20usize, 0usize), // DLT_LINUX_SLL2
         _ => return None,
     };
     if frame.len() < network_offset + 20 + 20 {
@@ -314,16 +307,12 @@ fn parse_tcp_packet(
     }
 
     let ihl = ((frame[network_offset] & 0x0f) as usize) * 4;
-    if frame.len() < network_offset + ihl + 20
-        || frame[network_offset + 9] != 6
-    {
+    if frame.len() < network_offset + ihl + 20 || frame[network_offset + 9] != 6 {
         return None;
     }
 
-    let ip_total_len = u16::from_be_bytes([
-        frame[network_offset + 2],
-        frame[network_offset + 3],
-    ]) as usize;
+    let ip_total_len =
+        u16::from_be_bytes([frame[network_offset + 2], frame[network_offset + 3]]) as usize;
     let src = Endpoint {
         ip: Ipv4Addr::new(
             frame[network_offset + 12],
@@ -331,10 +320,7 @@ fn parse_tcp_packet(
             frame[network_offset + 14],
             frame[network_offset + 15],
         ),
-        port: u16::from_be_bytes([
-            frame[network_offset + ihl],
-            frame[network_offset + ihl + 1],
-        ]),
+        port: u16::from_be_bytes([frame[network_offset + ihl], frame[network_offset + ihl + 1]]),
     };
     let dst = Endpoint {
         ip: Ipv4Addr::new(

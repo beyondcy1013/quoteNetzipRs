@@ -1,0 +1,72 @@
+quoteNetzipRs OEM K-line complete Wine-buffer validation
+date: 2026-09-01 Asia/Shanghai
+deployment: none
+
+Capture isolation:
+  probe: windows_debug/kline_full_probe_20260901/KlineFixtureProbe.exe
+  account/password: 168/168
+  runtime: one-shot Wine sandbox using host networking
+  sandbox config sha256: d5f8344192490da10051412e4154669ca664f2fb6c344a41b10d3d20e70730f6
+  log: windows_debug/kline_full_probe_20260901/probe_run_168_isolated_20260901.txt
+
+The original Wine directory was copied to a temporary sandbox before Start(). The sandbox
+configuration was replaced with the repository's 168/168 configuration, so Start() could not
+auto-login with the production account. The log records authentication, stock-backup login,
+initialization completion, and a synchronous Ask return length of 296 for every K-line request.
+
+Complete answer fixtures:
+  daily:
+    file: windows_debug/kline_full_probe_20260901/fixtures/wine_daily_SH600000_3.bin
+    sha256: c7a418476cf347e8ef65308405e6a5fcf9caf3775e65532bb5c850ab4c97ec9f
+    ask_id=4 type=日线 bytes=296 len=96 count=3
+  five-minute:
+    file: windows_debug/kline_full_probe_20260901/fixtures/wine_five_minute_SH600000_3.bin
+    sha256: c9e0cab5b1b21c0c3342047cd0f78a1ff312c0902137d28cc6bdc7b91e5058cb
+    ask_id=5 type=5分钟线 bytes=296 len=96 count=3
+  one-minute:
+    file: windows_debug/kline_full_probe_20260901/fixtures/wine_one_minute_SH600000_3.bin
+    sha256: c75426c2dcebeb5cd76afcdec01bfbf3bfcf1087b8f112a57af62b4abee38e7e
+    ask_id=6 type=1分钟线 bytes=296 len=96 count=3
+
+All three headers contain label=SH600000, name=浦发银行, flag=0, power=0, oem_ver=0,
+and value[0]=2. The complete 200-byte header and all three 32-byte records are retained;
+these files are not reconstructions from printed fields.
+
+Recovered service mapping rules:
+  daily timestamp: normalize the 7709 bar's China date to 00:00:00
+  minute timestamp: preserve the 7709 bar time
+  volume: round(7709 volume / code-table volume_unit)
+  SH600000 volume_unit: 100
+
+Examples:
+  daily 2026-08-27 15:00:00 -> 1787760000
+  daily volume 95810088 / 100 -> 958101
+  five-minute volume 1662100 / 100 -> 16621
+  one-minute volume 300 / 100 -> 3
+
+Verification:
+  codec RED request: 052528-18d0ccb5d58be493
+  codec GREEN request: 052711-18d0ccb5d58be494
+  service RED request: 053707-18d0ccb5d58be499
+  service effective GREEN request: 053923-18d0ccb5d58be49b
+  service GREEN log: /home/bin/webclx/compile/runs/20260901T053928-735779-15551/build-1.log
+  service result: 1 passed; 0 failed
+  final regression request: 055533-18d0ccb5d58be4a3
+  final regression log: /home/bin/webclx/compile/runs/20260901T055538-812406-19581/build-1.log
+  shared crate: 13 passed; 0 failed
+  codec: 17 passed; 0 failed
+  workspace non-empty groups: 151 passed; 0 failed
+  service bin: 62 passed; 0 failed
+  release build: succeeded
+  release size: 9900480 bytes
+  release sha256: 0e57cb99b24569f64d7feabf333616895852f0f0edecbe83f4dfefbeca632536
+
+The codec test rebuilds each complete packet from its decoded fields and compares all 296 bytes.
+The service test starts from 7709-shaped bars (15:00 daily timestamps and volume multiplied by
+volume_unit), calls the same encode_oem_kline_item function used by the HTTP handler, and compares
+all 296 bytes against each Wine fixture.
+
+Evidence boundary:
+  This closes the captured SH600000 three-record daily, five-minute, and one-minute OEM packets.
+  It does not prove large-page continuity, every symbol/volume_unit combination, dynamic callback
+  ordering, failure paths, concurrent load, or full-market open-session quality.

@@ -413,10 +413,10 @@ fn extract_numeric_tokens(bytes: &[u8]) -> Vec<String> {
         match byte {
             0 | 1 => {
                 if !token.is_empty() {
-                    if let Ok(text) = std::str::from_utf8(&token) {
-                        if text.chars().all(|ch| ch.is_ascii_digit()) {
-                            out.push(text.to_string());
-                        }
+                    if let Ok(text) = std::str::from_utf8(&token)
+                        && text.chars().all(|ch| ch.is_ascii_digit())
+                    {
+                        out.push(text.to_string());
                     }
                     token.clear();
                 }
@@ -424,22 +424,21 @@ fn extract_numeric_tokens(bytes: &[u8]) -> Vec<String> {
             b if b.is_ascii_digit() => token.push(b),
             _ => {
                 if !token.is_empty() {
-                    if let Ok(text) = std::str::from_utf8(&token) {
-                        if text.chars().all(|ch| ch.is_ascii_digit()) {
-                            out.push(text.to_string());
-                        }
+                    if let Ok(text) = std::str::from_utf8(&token)
+                        && text.chars().all(|ch| ch.is_ascii_digit())
+                    {
+                        out.push(text.to_string());
                     }
                     token.clear();
                 }
             }
         }
     }
-    if !token.is_empty() {
-        if let Ok(text) = std::str::from_utf8(&token) {
-            if text.chars().all(|ch| ch.is_ascii_digit()) {
-                out.push(text.to_string());
-            }
-        }
+    if !token.is_empty()
+        && let Ok(text) = std::str::from_utf8(&token)
+        && text.chars().all(|ch| ch.is_ascii_digit())
+    {
+        out.push(text.to_string());
     }
     out
 }

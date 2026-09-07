@@ -29,7 +29,9 @@ pub fn load(account_fallback: Option<&str>, password_fallback: Option<&str>) -> 
     }
     AuthCredentials {
         account,
-        password: password_fallback.filter(|value| !value.is_empty()).map(str::to_owned),
+        password: password_fallback
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
         password_source: if password_fallback.is_some_and(|value| !value.is_empty()) {
             "runtime_state"
         } else {

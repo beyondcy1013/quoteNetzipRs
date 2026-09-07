@@ -8,24 +8,36 @@
 - 遇到 `rtk` 不支持的复杂 shell、`find` 谓词或原始管道语法时，使用 `rtk proxy <command>` 执行原始命令。
 - 可用 `rtk --version`、`rtk gain`、`which rtk` 验证 RTK 是否生效。
 
-本文件适用于整个 `/home/codes/quoteNetzipRs` 仓库。
+本文件适用于整个 `/home/codes/stock/quoteNetzipRs` 仓库。
 
 本项目继承 `/home/codes/AGENTS.MD` 的公共执行策略、上下文记忆规则、系统级硬约束、服务部署总约定和文档分层规则。若本文件与上级系统目标冲突，以上级为准。
 
 ## Project Highest Goal
 
-Provide a correct, timely, observable, and progressively Wine-independent Netzip market-data client
-for the stock system, while retaining the vendor client as a controlled comparison anchor until the
-native Rust chain has equivalent production evidence.
+`quoteNetzipRs` 的最高目标是在 Linux/Rust 中复刻 `quoteNetzipWine` 的完整数据能力：
+正式账号认证后的厂商全推，以及通过 7709 完成的查询型补数据。权威能力边界见
+[`docs/capability-boundaries.md`](docs/capability-boundaries.md)。
+
+- `netzip-fullpull` 对应 Wine 的官方全推：正式账号登录后的非 7709 厂商数据链，目前证据
+  指向 5188。全市场 7709 扫描不得称为全推。
+- `netzip-supplement` 对应 Wine 的补数据：7709 代码表、快照查询、K 线、F10、财务等。
+- 当前代码仍有旧 `netzip-native` 遗留的 7709 模块位于 `netzip-fullpull`，这是待迁移的
+  物理现状，不改变上述产品语义，也不代表官方全推已经完成。
 
 ## Current Market Client Progress
 
-- The Linux-native `7709` path provides code-table synchronization, live quotes, K-line, F10, FIN,
-  and `0547` parsing through CLI and HTTP entry points.
+- `netzip-fullpull` 已由含义不清晰的 `netzip-native` 改名，目标所有权是正式账号认证后的
+  官方全推连接、初始化、持续下发、解码与重连。
+- `netzip-supplement` 是 7709 查询型补数据的所有者。旧 7709/0547 实现仍待从
+  `netzip-fullpull` 收敛到该包。
+- 证据与上下文安全：测试账号（标识 `168`）可能只获得 7709 路由，其行情数据可能缺失、
+  部分陈旧或与正式账号权限不一致；只能做短时结构诊断，不能证明数据正确性、覆盖度或全推验收。
+  `/compact` 是有损上下文压缩，不能替代证据落盘；压缩前必须把证据路径、命令、时间和下一步
+  判别实验写入权威文档，压缩后必须重读文档和原始证据。
 - Native account `1522` authentication to remote `7100` succeeds with the verified three-response
   sequence, but it is currently a standalone Rust module/CLI rather than a resident service session.
-- `netzip-rs.service` and `netzip-rs-full-push.service` are deployed under `/home/bin/netzip/` and
-  publish native Rust quotes to quoteGateway.
+- 当前 `quote-netzip-rs-full-push.service` 实际运行的是 7709 工作表扫描过渡路径；服务名中的
+  `full-push` 是历史命名，不能作为官方全推已经实现的证据。
 - Commit `28ea978` bounded the gateway TCP client cache after thread-keyed entries exhausted file
   descriptors with retained `CLOSE-WAIT` sockets. Post-deployment idle checks reported `fd=7` and
   `CLOSE-WAIT=0`; trading-load acceptance remains required.
@@ -47,7 +59,9 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 
 ## 项目定位
 
-这个项目不是对网际风协议的纯 Rust 重写，而是围绕官方 `Stock64.dll / Stock.dll`、抓包样本和逆向笔记建立起来的 Rust 分析与调试仓库，当前主要承担 4 类工作：
+当前产品定位：`quoteNetzipRs = 官方全推 + 7709 补数据`。Rust 官方全推主链尚未复刻完成；
+现有 7709 常驻发布只是过渡实现，不得写成官方全推合同。
+仓库同时保留以下分析和调试职责：
 
 1. Rust FFI 调用官方 DLL。
 2. 对 `OEM_DATA_HEAD` 及各类返回包做结构化解析。
@@ -58,14 +72,14 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 
 本项目的重要参考目录（已移入本项目内）：
 
-- 相对路径：`./netzip_api_bin/NetzipAPI`
-- 绝对路径：`/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI`
+- 相对路径：`./docs/netzip_api_bin/NetzipAPI`
+- 绝对路径：`/home/codes/stock/quoteNetzipRs/docs/netzip_api_bin/NetzipAPI`
 
 这个目录不是当前 Rust 项目生成的内容，而是网际风官方/历史样本/配套资源的参考资料集合。当前仓库中的很多结论、默认文件路径、请求串格式和运行依赖，都是从这个参考目录抽出来的。
 
 ## 参考目录的功能
 
-`./netzip_api_bin/NetzipAPI` 目前承担以下角色：
+`./docs/netzip_api_bin/NetzipAPI` 目前承担以下角色：
 
 ### 1. 官方接口与调用规范参考
 
@@ -159,7 +173,7 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 
 当前 Rust 仓库与参考目录的关系可以概括为：
 
-1. `README.md` 中关于 DLL 路径、运行前提的描述，来源于 `./netzip_api_bin/NetzipAPI`。
+1. `README.md` 中关于 DLL 路径、运行前提的描述，来源于 `./docs/netzip_api_bin/NetzipAPI`。
 2. `PROTOCOL_NOTES.md` 中关于请求串、服务器端口、抓包结论、下载文件和配置文件的记录，部分直接来自参考目录中的文档、样本程序和资源文件。
 3. `src/` 和 `examples/` 中的很多解析逻辑，是基于参考目录里的结构定义、官方示例行为和抓包样本逐步确认出来的。
 4. Web UI 和 HTTP 服务只是当前 Rust 仓库的调试外壳，真正的业务语义来源仍然要回到参考目录与抓包样本一起交叉验证。
@@ -168,8 +182,8 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 
 在这个仓库里工作时，应遵守下面的约定：
 
-1. 把 `./netzip_api_bin/NetzipAPI` 当成”参考资料目录”，不是当前仓库的实现目录。
-2. 当前仓库优先修改 `/home/codes/quoteNetzipRs` 内的代码和文档；不要无意修改参考目录。
+1. 把 `./docs/netzip_api_bin/NetzipAPI` 当成”参考资料目录”，不是当前仓库的实现目录。
+2. 当前仓库优先修改 `/home/codes/stock/quoteNetzipRs` 内的代码和文档；不要无意修改参考目录。
 3. 遇到以下问题时，应优先回查参考目录：
    - DLL 导出签名不确定
    - 请求串字段含义不确定
@@ -187,15 +201,15 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 1. 先看当前仓库的 `README.md`
 2. 再看当前仓库的 `PROTOCOL_NOTES.md`
 3. 然后回看参考目录：
-   - `./netzip_api_bin/NetzipAPI/股票接口调用规范.txt`
-   - `./netzip_api_bin/NetzipAPI/StockC++/OemStock.h`
-   - `./netzip_api_bin/NetzipAPI/StockC++/用户/服务器列表.ini`
-   - `./netzip_api_bin/NetzipAPI/StockC++/升级配置.ini`
+   - `./docs/netzip_api_bin/NetzipAPI/股票接口调用规范.txt`
+   - `./docs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h`
+   - `./docs/netzip_api_bin/NetzipAPI/StockC++/用户/服务器列表.ini`
+   - `./docs/netzip_api_bin/NetzipAPI/StockC++/升级配置.ini`
 4. 最后再结合 `captured_windows_traffic/`、`examples/` 和 `src/bin/netzip_service.rs` 看当前仓库已经落地了哪些能力
 
 ## 结论
 
-`./netzip_api_bin/NetzipAPI` 的本质是：
+`./docs/netzip_api_bin/NetzipAPI` 的本质是：
 
 - 官方接口规范来源
 - 多语言示例来源
@@ -203,3 +217,7 @@ The living progress, evidence, acceptance criteria, and unresolved issues are ma
 - 抓包和逆向时的对照物来源
 
 它不是本仓库的一部分实现，但它决定了本仓库很多分析工作的上下文和边界。
+
+禁止删除我的账号，禁止输出我的真实账号
+    218 -正式账号凭据：仅保存于受保护的运行时配置，不写入仓库
+    219 -测试账号类别：test-168；凭据仅保存于受保护的运行时配置，不写入仓库

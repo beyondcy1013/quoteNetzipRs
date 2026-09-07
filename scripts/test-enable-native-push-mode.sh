@@ -21,8 +21,12 @@ NETZIP_DEFAULTS_PATH="$defaults" NETZIP_SKIP_RESTART=1 \
 
 grep -Fxq 'NETZIP_QUOTE_GATEWAY_ADDR=127.0.0.1:16886' "$defaults"
 grep -Fxq 'NETZIP_FULL_PUSH_MODE=push' "$defaults"
+grep -Fxq 'NETZIP_FULL_PUSH_WORKERS=64' "$defaults"
 grep -Fxq 'NETZIP_NATIVE_PUSH_PUBLISH_ENABLE=1' "$defaults"
 grep -Fxq 'NETZIP_NATIVE_PUSH_SESSION_SECS=240' "$defaults"
 grep -Fxq 'NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS=30' "$defaults"
+grep -Fxq 'NETZIP_NATIVE_BJ_POLL_INTERVAL_SECS=3' "$defaults"
 test "$(grep -c '^NETZIP_FULL_PUSH_MODE=' "$defaults")" -eq 1
+test "$(grep -c '^NETZIP_FULL_PUSH_WORKERS=' "$defaults")" -eq 1
 test "$(grep -c '^NETZIP_NATIVE_PUSH_PUBLISH_ENABLE=' "$defaults")" -eq 1
+test "$(grep -c '^NETZIP_NATIVE_BJ_POLL_INTERVAL_SECS=' "$defaults")" -eq 1

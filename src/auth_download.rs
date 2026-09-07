@@ -25,6 +25,9 @@ pub struct DownloadedServerEntry {
     pub main_port: u16,
     pub secondary_port: u16,
     pub enabled: bool,
+    pub broker: Option<String>,
+    pub permission: Option<String>,
+    pub interface_version: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -210,20 +213,59 @@ fn parse_server_entry(
         .map(str::trim)
         .filter(|item| !item.is_empty())
         .collect::<Vec<_>>();
-    let main_port = parts.get(2)?.parse::<u16>().ok()?;
-    let secondary_port = match parts.as_slice() {
-        [_, _, _] => main_port,
-        [_, _, _, secondary_port] => secondary_port.parse::<u16>().ok()?,
+    // Full-push L1 files use: broker, permission, display-name, host, port,
+    // interface-version, client-version. Supplement files use the shorter
+    // name, host, port[, secondary-port] form.
+    let (name, host, main_port, secondary_port) = match parts.as_slice() {
+        [name, host, port] => {
+            let port = port.parse::<u16>().ok()?;
+            (name.to_string(), host.to_string(), port, port)
+        }
+        [name, host, port, secondary_port] => {
+            let port = port.parse::<u16>().ok()?;
+            (
+                name.to_string(),
+                host.to_string(),
+                port,
+                secondary_port.parse().ok()?,
+            )
+        }
+        [
+            broker,
+            permission,
+            display_name,
+            host,
+            port,
+            interface_version,
+            ..,
+        ] => {
+            let port = port.parse::<u16>().ok()?;
+            let name = format!("{broker}/{permission}/{display_name}");
+            return Some(DownloadedServerEntry {
+                group_name,
+                name,
+                host: host.to_string(),
+                main_port: port,
+                secondary_port: port,
+                enabled,
+                broker: Some((*broker).to_string()),
+                permission: Some((*permission).to_string()),
+                interface_version: interface_version.parse().ok(),
+            });
+        }
         _ => return None,
     };
 
     Some(DownloadedServerEntry {
         group_name,
-        name: parts[0].to_string(),
-        host: parts[1].to_string(),
+        name,
+        host,
         main_port,
         secondary_port,
         enabled,
+        broker: None,
+        permission: None,
+        interface_version: None,
     })
 }
 
@@ -474,8 +516,27 @@ mod tests {
                 main_port: 5188,
                 secondary_port: 5188,
                 enabled: true,
+                broker: None,
+                permission: None,
+                interface_version: None,
             }]
         );
+    }
+
+    #[test]
+    fn parses_l1_seven_column_fullpull_server_entry() {
+        let parsed =
+            parse_server_config_text("华创, 点播版, 北京联通, 58.16.134.228, 5188, 858, 8.50\n");
+        assert_eq!(parsed.active_servers.len(), 1);
+        assert_eq!(parsed.active_servers[0].host, "58.16.134.228");
+        assert_eq!(parsed.active_servers[0].main_port, 5188);
+        assert_eq!(parsed.active_servers[0].secondary_port, 5188);
+        assert_eq!(parsed.active_servers[0].broker.as_deref(), Some("华创"));
+        assert_eq!(
+            parsed.active_servers[0].permission.as_deref(),
+            Some("点播版")
+        );
+        assert_eq!(parsed.active_servers[0].interface_version, Some(858));
     }
 
     #[test]

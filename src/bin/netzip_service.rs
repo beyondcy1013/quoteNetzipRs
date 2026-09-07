@@ -1,3 +1,17 @@
+#![allow(
+    clippy::chunks_exact_to_as_chunks,
+    clippy::manual_is_multiple_of,
+    clippy::missing_safety_doc,
+    clippy::too_many_arguments,
+    clippy::collapsible_if,
+    clippy::manual_range_patterns,
+    clippy::items_after_test_module,
+    clippy::unnecessary_unwrap,
+    clippy::type_complexity,
+    clippy::field_reassign_with_default,
+    dead_code
+)]
+
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::http::header;
@@ -6,28 +20,39 @@ use axum::{
     Json, Router,
     routing::{get, post},
 };
+use netzip_fullpull::Official5188Session;
+use netzip_supplement::{
+    SupplementCodeTableReport, SupplementCounts, SupplementItemResult, SupplementPeriod,
+    SupplementReport, SupplementRequest, WineFinanceReport, WineRealtimeDatReport, WineSplitReport,
+    decode_wine_realtime_amount, decode_wine_realtime_change, decode_wine_realtime_liang_bi,
+    decode_wine_realtime_wei_bi, fetch_supplement, filter_wine_code_worklist_by_realtime,
+    join_wine_code_table, parse_wine_code_worklist, parse_wine_fin_v8, parse_wine_pwr_v8,
+    parse_wine_realtime_dat, validate_request as validate_supplement, validate_wine_fin_v6_file,
+};
 use netzipapi_rust_demo::tdx_0547_scheduler::{QuoteRenewalScheduler, RenewalRateGate};
 use netzipapi_rust_demo::tdx_push_coalescer::{TdxPushCoalescer, TdxPushEvent};
 use netzipapi_rust_demo::{
-    Auth7100ClientConfig, Auth7100LoginResult, Auth7100ProbeResult, DEFAULT_AUTH_HOST,
-    DEFAULT_LOGIN_PORT, DEFAULT_PROBE_PORTS, FIN_GETTER_UNRESOLVED_IDS, ProtoProbeConfig,
+    Auth7100ClientConfig, Auth7100ControlSession, Auth7100LoginResult, Auth7100ProbeResult,
+    DEFAULT_AUTH_HOST, DEFAULT_LOGIN_PORT, DEFAULT_PROBE_PORTS, FIN_GETTER_UNRESOLVED_IDS,
+    Official5188ShadowReader, Official5188ShadowSnapshot, ProtoProbeConfig,
     ProtoProbeEncoding as ProbeEncoding, QuoteReplayConfig, SH_FIN_URL, SZ_FIN_URL, Tdx7709Config,
     Tdx7709QuoteRequestItem, Tdx7709Session, analyze_auth_7100_client_shell_sample,
-    analyze_auth_7100_flow_matrix, analyze_auth_7100_flow_matrix_sample,
-    analyze_auth_7100_server_sample, analyze_auth_7100_shell_correlation_from_pcap,
-    analyze_auth_7100_shell_correlation_sample, analyze_local_2000_log_file,
-    analyze_local_2000_vs_auth7100, analyze_local_2000_vs_auth7100_sample, analyze_stream_file,
-    build_bootstrap_packets, build_probe_hello, compare_blob_files, connect_legacy_panel,
-    disconnect_legacy_panel, fetch_f10_categories, fetch_f10_content, fetch_kline,
-    fetch_live_quotes, fin_getter_specs, load_legacy_panel_bootstrap,
-    login_auth_6100_with_verified_dictionary, parse_answer_buffer, parse_fin_file,
-    parse_quote_segments, parse_tdx_0547_body, probe_auth_server, probe_legacy_servers,
-    probe_proto, query_tdx_0547_records, replay_quote_file, save_legacy_panel_config,
-    scan_quote_frame_file, summarize_from_answer_buffer, summarize_pcap_file, sync_code_table,
+    analyze_auth_7100_flow_matrix_sample, analyze_auth_7100_server_sample,
+    analyze_auth_7100_shell_correlation_from_pcap, analyze_auth_7100_shell_correlation_sample,
+    analyze_local_2000_log_file, analyze_local_2000_vs_auth7100,
+    analyze_local_2000_vs_auth7100_sample, analyze_stream_file, build_bootstrap_packets,
+    build_probe_hello, compare_blob_files, connect_auth_control_with_verified_dictionary,
+    connect_legacy_panel, disconnect_legacy_panel, fetch_f10_categories, fetch_f10_content,
+    fetch_kline, fetch_live_quotes, fin_getter_specs, load_legacy_panel_bootstrap,
+    parse_answer_buffer, parse_fin_file, parse_quote_segments, parse_tdx_0547_body,
+    probe_auth_server, probe_legacy_servers, probe_proto, query_tdx_0547_records,
+    replay_quote_file, save_legacy_panel_config, scan_official_5188_pcap, scan_quote_frame_file,
+    summarize_from_answer_buffer, summarize_pcap_file, sync_code_table,
     tdx_0547_extra0_time_hint_seconds, tdx_0547_format_hhmmss_raw, tdx_0547_hhmmss_raw_to_seconds,
     tdx_0547_market_name, tdx_0547_normalize_quote_head, tdx_0547_public_time_hhmmss,
     tdx_0547_record_symbol, write_code_table_csv, write_fin_csv,
 };
+use pinyin::ToPinyin;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -37,13 +62,24 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tuwenca_codec::{
+    FinanceSnapshot, InstrumentId, KlineSnapshot, MarketInfoSnapshot, RealtimeSnapshot,
+    SplitGroupSnapshot, SplitSnapshot, StockInfoSnapshot, encode_code_table_packet,
+    encode_file_packet, encode_finance_packet, encode_kline_packet, encode_realtime_snapshots,
+    encode_split_packet,
+};
 
 static FULL_PUSH_SESSION_CACHE: OnceLock<Mutex<BTreeMap<String, Tdx7709Session>>> = OnceLock::new();
+const SERVICE_NAME: &str = "quoteNetzipRs";
 static FULL_PUSH_LAST_PUBLISHED_AT: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
 static NETZIP_RUST_TCP_CLIENTS: OnceLock<
     Mutex<BTreeMap<String, Arc<Mutex<Option<NetzipRustTcpClient>>>>>,
 > = OnceLock::new();
 const AUTH_LOGIN_ENABLED_ENV: &str = "NETZIP_AUTH_LOGIN_ENABLED";
+const AUTH_HOST_ENV: &str = "NETZIP_TDX_AUTH_HOST";
+const AUTH_PORT_ENV: &str = "NETZIP_TDX_AUTH_PORT";
+const OFFICIAL_5188_SHADOW_MAX_FRAMES: usize = 4096;
+const OFFICIAL_5188_SHADOW_MAX_BYTES: usize = 32 * 1024 * 1024;
 static NETZIP_RUST_PUBLISH_METRICS: OnceLock<Mutex<BTreeMap<String, GatewayPublishMetrics>>> =
     OnceLock::new();
 static NATIVE_PUSH_CODE_TABLE_LOOKUP: OnceLock<BTreeMap<String, Quote0547CodeTableInfo>> =
@@ -232,7 +268,7 @@ impl NetzipRustTcpClient {
             ApiError::internal(format!("connect netzip rust tcp {addr} failed: {err}"))
         })?;
         stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
+            .set_read_timeout(Some(netzip_rust_tcp_ack_timeout()))
             .map_err(|err| {
                 ApiError::internal(format!("set netzip tcp read timeout failed: {err}"))
             })?;
@@ -328,10 +364,179 @@ struct AppState {
     version: &'static str,
     auth: Arc<AuthRuntime>,
     full_push_in_progress: Arc<AtomicBool>,
+    wine_events: Arc<Mutex<std::collections::VecDeque<serde_json::Value>>>,
+    wine_event_sequence: Arc<std::sync::atomic::AtomicU64>,
 }
 
 struct FullPushLease {
     in_progress: Arc<AtomicBool>,
+}
+
+#[derive(Serialize)]
+struct WineApiEnvelope<T: Serialize> {
+    data: T,
+}
+
+#[derive(Serialize)]
+struct WineHealth {
+    status: &'static str,
+}
+
+#[derive(Serialize)]
+struct WineGatewayForwarder {
+    configured: bool,
+    task_started: bool,
+    received_batches: u64,
+    received_quotes: u64,
+    attempted_posts: u64,
+    successful_posts: u64,
+    coalesced_batches: u64,
+    retried_posts: u64,
+    dropped_batches: u64,
+    last_status: Option<u64>,
+    last_error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WineVendorConfig {
+    path: String,
+    requested: WineVendorConfigRequested,
+    effective: WineVendorConfigEffective,
+    changed: bool,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WineVendorConfigRequested {
+    auth_server: Option<String>,
+    primary_server: Option<String>,
+    backup_server: Option<String>,
+    failover: Option<bool>,
+    login_auth: Option<bool>,
+    login_primary: bool,
+    login_backup: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct WineVendorConfigEffective {
+    auth_server: String,
+    primary_server: String,
+    backup_server: String,
+    failover: bool,
+    login_auth: bool,
+    login_primary: bool,
+    login_backup: bool,
+}
+
+#[derive(Serialize)]
+struct WineServiceStatus {
+    status: &'static str,
+    gateway_forwarder: WineGatewayForwarder,
+    vendor_config: WineVendorConfig,
+}
+
+fn wine_service_status(state: &AppState) -> WineServiceStatus {
+    let auth = state.auth.state.lock().unwrap_or_else(|e| e.into_inner());
+    WineServiceStatus {
+        status: "ok",
+        gateway_forwarder: WineGatewayForwarder {
+            configured: true,
+            task_started: true,
+            received_batches: 0,
+            received_quotes: 0,
+            attempted_posts: 0,
+            successful_posts: 0,
+            coalesced_batches: 0,
+            retried_posts: 0,
+            dropped_batches: 0,
+            last_status: None,
+            last_error: None,
+        },
+        vendor_config: WineVendorConfig {
+            path: "用户/配置文件.ini".into(),
+            requested: WineVendorConfigRequested {
+                auth_server: None,
+                primary_server: None,
+                backup_server: None,
+                failover: None,
+                login_auth: None,
+                login_primary: auth.login_success_confirmed,
+                login_backup: None,
+            },
+            effective: WineVendorConfigEffective {
+                auth_server: "智能选择".into(),
+                primary_server: "智能选择".into(),
+                backup_server: String::new(),
+                failover: true,
+                login_auth: auth.login_success_confirmed,
+                login_primary: auth.login_success_confirmed,
+                login_backup: false,
+            },
+            changed: false,
+            error: None,
+        },
+    }
+}
+
+async fn wine_v1_status(State(state): State<AppState>) -> Json<WineApiEnvelope<WineServiceStatus>> {
+    Json(WineApiEnvelope {
+        data: wine_service_status(&state),
+    })
+}
+
+async fn wine_v1_health() -> Json<WineApiEnvelope<WineHealth>> {
+    Json(WineApiEnvelope {
+        data: WineHealth { status: "ok" },
+    })
+}
+
+#[derive(Deserialize)]
+struct WineEventsQuery {
+    limit: Option<usize>,
+}
+
+async fn wine_v1_events(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<WineEventsQuery>,
+) -> Json<WineApiEnvelope<Vec<serde_json::Value>>> {
+    let limit = query.limit.unwrap_or(200).min(10_000);
+    let events = state
+        .wine_events
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .rev()
+        .take(limit)
+        .cloned()
+        .collect::<Vec<_>>();
+    Json(WineApiEnvelope { data: events })
+}
+
+fn wine_record_event(state: &AppState, channel: &str, form: &str, text: String) {
+    let seq = state
+        .wine_event_sequence
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let timestamp_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let event = serde_json::json!({
+        "sequence": seq,
+        "timestamp_ms": timestamp_ms,
+        "channel": channel,
+        "form": form,
+        "ask_id": null,
+        "return_code": null,
+        "packet": null,
+        "text": text,
+        "raw_len": 0,
+        "raw_hex": null,
+    });
+    let mut log = state.wine_events.lock().unwrap_or_else(|e| e.into_inner());
+    log.push_back(event);
+    while log.len() > 10_000 {
+        log.pop_front();
+    }
 }
 
 impl Drop for FullPushLease {
@@ -351,8 +556,30 @@ fn try_acquire_full_push(in_progress: &Arc<AtomicBool>) -> Option<FullPushLease>
 
 struct AuthRuntime {
     state: Mutex<AuthStatusResponse>,
+    control_session: Mutex<Option<Auth7100ControlSession>>,
+    official_5188_session: Mutex<Option<Official5188Session>>,
+    official_5188_shadow: Mutex<Vec<Official5188ShadowReader>>,
+    official_5188_init: Mutex<Option<Official5188InitSummary>>,
     login_in_progress: Mutex<bool>,
     login_control_enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+struct Official5188InitSummary {
+    post_initialization_frame_count: usize,
+    code_table_count: usize,
+    connection_count: usize,
+    receive_list_codes: usize,
+    slots: Vec<Official5188SlotInitSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct Official5188SlotInitSummary {
+    slot: usize,
+    login_number: u32,
+    subscription_entries: usize,
+    post_initialization_frame_count: usize,
+    code_table_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -372,6 +599,7 @@ struct AuthStatusResponse {
     active_server_count: usize,
     selected_quote_endpoint: Option<String>,
     selected_7709_endpoint: Option<String>,
+    control_session_retained: bool,
     last_error: Option<String>,
     attempt_started_at: Option<u64>,
     completed_at: Option<u64>,
@@ -398,6 +626,7 @@ impl Default for AuthStatusResponse {
             active_server_count: 0,
             selected_quote_endpoint: None,
             selected_7709_endpoint: None,
+            control_session_retained: false,
             last_error: None,
             attempt_started_at: None,
             completed_at: None,
@@ -444,6 +673,7 @@ mod resident_auth_contract_tests {
         status.active_server_count = 10;
         status.selected_quote_endpoint = Some("198.51.100.10:5188".to_string());
         status.selected_7709_endpoint = Some("198.51.100.11:7709".to_string());
+        status.control_session_retained = true;
 
         super::begin_auth_attempt(&mut status, 123);
 
@@ -456,6 +686,7 @@ mod resident_auth_contract_tests {
         assert_eq!(status.active_server_count, 0);
         assert_eq!(status.selected_quote_endpoint, None);
         assert_eq!(status.selected_7709_endpoint, None);
+        assert!(!status.control_session_retained);
         assert_eq!(status.attempt_started_at, Some(123));
         assert_eq!(status.completed_at, None);
     }
@@ -520,6 +751,22 @@ mod netzip_rust_tcp_transport_contract_tests {
 
         assert_eq!(actual, expected);
     }
+
+    #[test]
+    fn persistent_tcp_client_uses_configured_ack_timeout() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let accept = std::thread::spawn(move || listener.accept().expect("accept client"));
+
+        let client = super::NetzipRustTcpClient::connect(&addr.to_string()).expect("connect");
+
+        assert_eq!(
+            client.stream.read_timeout().expect("read timeout"),
+            Some(super::netzip_rust_tcp_ack_timeout())
+        );
+        drop(client);
+        drop(accept.join().expect("join accept"));
+    }
 }
 
 #[derive(Serialize)]
@@ -532,6 +779,8 @@ struct HealthResponse {
 #[derive(Serialize)]
 struct CapabilitiesResponse {
     service: &'static str,
+    public_service_endpoints: Vec<&'static str>,
+    public_service_policy: &'static str,
     stable_endpoints: Vec<&'static str>,
     linux_native_endpoints: Vec<&'static str>,
     windows_bridge_endpoints: Vec<&'static str>,
@@ -716,6 +965,7 @@ struct CodeTableRecordPreview {
     market: String,
     code: String,
     name: String,
+    volume_unit: u16,
     decimal_point: u8,
     pre_close: f32,
     meta_hex: String,
@@ -839,6 +1089,7 @@ struct HqwPushWorklistRequest {
     duration_secs: Option<u64>,
     audit_interval_secs: Option<u64>,
     bj_poll_interval_secs: Option<u64>,
+    worker_count: Option<usize>,
     publish: Option<bool>,
 }
 
@@ -850,6 +1101,9 @@ struct HqwPushWorklistResponse {
     worklist_count: usize,
     subscribed_count: usize,
     shard_count: usize,
+    worker_count: usize,
+    endpoint_pool_size: usize,
+    endpoint_failovers: usize,
     received_records: usize,
     converted_records: usize,
     unconverted_symbols: usize,
@@ -975,6 +1229,115 @@ struct Tdx7709KlineResponse {
     preview: Vec<Tdx7709KlineBarPreview>,
     first_bar: Option<Tdx7709KlineBarPreview>,
     last_bar: Option<Tdx7709KlineBarPreview>,
+}
+
+#[derive(Deserialize)]
+struct SupplementHttpRequest {
+    host: Option<String>,
+    port: Option<u16>,
+    read_timeout_ms: Option<u64>,
+    connect_timeout_ms: Option<u64>,
+    settle_ms: Option<u64>,
+    #[serde(flatten)]
+    supplement: SupplementRequest,
+}
+
+#[derive(Serialize)]
+struct SupplementHttpResponse {
+    host: String,
+    port: u16,
+    report: SupplementReport,
+}
+
+#[derive(Deserialize)]
+struct OemSupplementHttpRequest {
+    host: Option<String>,
+    port: Option<u16>,
+    read_timeout_ms: Option<u64>,
+    connect_timeout_ms: Option<u64>,
+    settle_ms: Option<u64>,
+    symbol: String,
+    name: Option<String>,
+    period: SupplementPeriod,
+    count: Option<u32>,
+    page_size: Option<u16>,
+    interval_ms: Option<u64>,
+    ask_id: Option<u32>,
+    power: Option<i8>,
+}
+
+const DEFAULT_WINE_CODE_WORKLIST_PATH: &str =
+    "/home/codes/third_party/quoteNetzipWine/用户/只接收股票代码表.csv";
+const DEFAULT_WINE_PWR_V8_PATH: &str = "/home/codes/third_party/quoteNetzipWine/数据/除权V8.pwr";
+const DEFAULT_WINE_FIN_V8_PATH: &str = "/home/codes/third_party/quoteNetzipWine/数据/财务V8.fin";
+const DEFAULT_WINE_FIN_V6_PATH: &str = "/home/codes/third_party/quoteNetzipWine/数据/财务V6.fin";
+const DEFAULT_WINE_REALTIME_PATH: &str = "/home/codes/third_party/quoteNetzipWine/数据/实时.dat";
+const DEFAULT_WINE_FIN_V6_LABEL: &str = "数据\\财务V6.fin";
+
+#[derive(Deserialize)]
+struct CodeTableSupplementHttpRequest {
+    host: Option<String>,
+    port: Option<u16>,
+    read_timeout_ms: Option<u64>,
+    connect_timeout_ms: Option<u64>,
+    settle_ms: Option<u64>,
+    worklist_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OemCodeTableSupplementHttpRequest {
+    host: Option<String>,
+    port: Option<u16>,
+    read_timeout_ms: Option<u64>,
+    connect_timeout_ms: Option<u64>,
+    settle_ms: Option<u64>,
+    worklist_path: Option<String>,
+    market: String,
+    ask_id: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct OemSplitSupplementHttpRequest {
+    worklist_path: Option<String>,
+    pwr_path: Option<String>,
+    realtime_path: Option<String>,
+    ask_id: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct OemFinanceSupplementHttpRequest {
+    worklist_path: Option<String>,
+    fin_path: Option<String>,
+    realtime_path: Option<String>,
+    ask_id: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct OemFileSupplementHttpRequest {
+    file_path: Option<String>,
+    label: Option<String>,
+    ask_id: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct RealtimeSupplementHttpRequest {
+    realtime_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OemRealtimeSupplementHttpRequest {
+    realtime_path: Option<String>,
+    fin_path: Option<String>,
+    ask_id: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct CodeTableSupplementHttpResponse {
+    host: String,
+    port: u16,
+    worklist_path: String,
+    source_protocol: &'static str,
+    report: SupplementCodeTableReport,
 }
 
 #[derive(Deserialize)]
@@ -1215,6 +1578,8 @@ struct Auth7100FlowMatrixResponse {
 #[derive(Deserialize)]
 struct Auth7100PathFilterRequest {
     path: String,
+    #[serde(default)]
+    service_port: Option<u16>,
     local_endpoint: Option<String>,
     session_role: Option<String>,
     source_endpoint: Option<String>,
@@ -1258,6 +1623,12 @@ struct PcapSummaryResponse {
     duplicate_packets: usize,
     truncated_unique_packets: usize,
     flows: Vec<netzipapi_rust_demo::PcapFlowSummary>,
+}
+
+#[derive(Serialize)]
+struct Official5188PcapSummaryResponse {
+    path: String,
+    flows: Vec<netzipapi_rust_demo::Official5188PcapFlow>,
 }
 
 #[derive(Deserialize)]
@@ -1698,16 +2069,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listen = parse_listen()?;
 
     let state = AppState {
-        service_name: "netzip-rs",
+        service_name: SERVICE_NAME,
         version: env!("CARGO_PKG_VERSION"),
         auth: Arc::new(AuthRuntime {
             state: Mutex::new(AuthStatusResponse::default()),
+            control_session: Mutex::new(None),
+            official_5188_session: Mutex::new(None),
+            official_5188_shadow: Mutex::new(Vec::new()),
+            official_5188_init: Mutex::new(None),
             login_in_progress: Mutex::new(false),
             login_control_enabled: auth_login_control_enabled_value(
                 std::env::var(AUTH_LOGIN_ENABLED_ENV).ok().as_deref(),
             ),
         }),
         full_push_in_progress: Arc::new(AtomicBool::new(false)),
+        wine_events: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        wine_event_sequence: Arc::new(std::sync::atomic::AtomicU64::new(1)),
     };
 
     let app = Router::new()
@@ -1721,6 +2098,30 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/login", post(auth_login))
         .route("/api/capabilities", get(capabilities))
+        .route(
+            "/api/fullpull/official-5188/status",
+            get(official_5188_status),
+        )
+        .route(
+            "/api/fullpull/official-5188/connect",
+            post(official_5188_connect),
+        )
+        .route(
+            "/api/fullpull/official-5188/disconnect",
+            post(official_5188_disconnect),
+        )
+        .route(
+            "/api/fullpull/official-5188/shadow/start",
+            post(official_5188_shadow_start),
+        )
+        .route(
+            "/api/fullpull/official-5188/shadow/stop",
+            post(official_5188_shadow_stop),
+        )
+        .route(
+            "/api/fullpull/official-5188/shadow/quotes",
+            get(official_5188_shadow_quotes),
+        )
         .route("/api/quotes", get(compact_quotes))
         .route("/api/hqw/publish", post(hqw_publish))
         .route("/api/hqw/publish-worklist", post(hqw_publish_worklist))
@@ -1742,6 +2143,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/tdx7709/live-quote", post(tdx7709_live_quote))
         .route("/api/tdx7709/snapshot", post(tdx7709_snapshot))
         .route("/api/tdx7709/kline", post(tdx7709_kline))
+        .route("/api/supplement/kline", post(tdx7709_supplement))
+        .route("/api/supplement/kline/oem", post(tdx7709_supplement_oem))
+        .route(
+            "/api/supplement/code-table",
+            post(tdx7709_code_table_supplement),
+        )
+        .route(
+            "/api/supplement/code-table/oem",
+            post(tdx7709_code_table_supplement_oem),
+        )
+        .route("/api/supplement/split/oem", post(wine_split_supplement_oem))
+        .route(
+            "/api/supplement/finance/oem",
+            post(wine_finance_supplement_oem),
+        )
+        .route("/api/supplement/file/oem", post(wine_file_supplement_oem))
+        .route("/api/supplement/realtime", post(wine_realtime_supplement))
+        .route(
+            "/api/supplement/realtime/oem",
+            post(wine_realtime_supplement_oem),
+        )
         .route("/api/tdx7709/f10/categories", post(tdx7709_f10_categories))
         .route("/api/tdx7709/f10/content", post(tdx7709_f10_content))
         .route("/api/tdx7709/bootstrap-plan", get(tdx7709_bootstrap_plan))
@@ -1788,7 +2210,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             post(quote_0547_extra_profile),
         )
         .route("/api/debug/pcap-summary", post(pcap_summary))
+        .route("/api/debug/pcap-5188-summary", post(pcap_5188_summary))
         .route("/api/debug/stream-analyze", post(stream_analyze))
+        .route("/api/v1/status", get(wine_v1_status))
+        .route("/api/v1/events", get(wine_v1_events))
         .with_state(state);
 
     println!("listening: http://{listen}");
@@ -1814,6 +2239,403 @@ async fn auth_status(State(state): State<AppState>) -> Json<AuthStatusResponse> 
             .unwrap_or_else(|err| err.into_inner())
             .clone(),
     )
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct Official5188StatusResponse {
+    authenticated: bool,
+    selected_endpoint: Option<String>,
+    control_session_retained: bool,
+    initialized: bool,
+    post_initialization_frame_count: Option<usize>,
+    code_table_count: Option<usize>,
+    connection_count: usize,
+    receive_list_codes: Option<usize>,
+    slots: Vec<Official5188SlotInitSummary>,
+    lane: &'static str,
+    business_decoder: &'static str,
+    shadow: Option<Official5188ShadowSnapshot>,
+    shadows: Vec<Official5188ShadowSnapshot>,
+}
+
+fn official_5188_lane(
+    connected: bool,
+    initialized: bool,
+    shadow: Option<&Official5188ShadowSnapshot>,
+) -> &'static str {
+    if initialized {
+        return match shadow {
+            Some(snapshot) if snapshot.running && snapshot.delta_2704_frames > 0 => {
+                "initialized-receiving-business-frames"
+            }
+            Some(snapshot) if snapshot.running && snapshot.frames_received > 0 => {
+                "initialized-receiving-opaque-frames"
+            }
+            Some(snapshot) if snapshot.running => "initialized-awaiting-server-frames",
+            Some(_) => "initialized-shadow-stopped",
+            None if connected => "initialized-connected",
+            None => "initialized-disconnected",
+        };
+    }
+    match shadow {
+        Some(snapshot) if snapshot.running && snapshot.frames_received > 0 => {
+            "shadow-receiving-opaque-frames"
+        }
+        Some(snapshot) if snapshot.running => "shadow-observing-uninitialized-socket",
+        Some(_) => "shadow-stopped",
+        None if connected => "connected-awaiting-initialization",
+        None => "pending-production-wiring",
+    }
+}
+
+fn official_5188_status_from_auth(auth: &AuthRuntime) -> Official5188StatusResponse {
+    let status = auth
+        .state
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone();
+    let shadows = official_5188_shadow_snapshots(auth);
+    let connected = !shadows.is_empty()
+        || auth
+            .official_5188_session
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .is_some();
+    let initialized = auth
+        .official_5188_init
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone();
+    let shadow = merge_official_5188_shadow_snapshots(&shadows);
+    Official5188StatusResponse {
+        authenticated: status.login_success_confirmed,
+        selected_endpoint: status.selected_quote_endpoint,
+        control_session_retained: status.control_session_retained,
+        initialized: initialized.is_some(),
+        post_initialization_frame_count: initialized
+            .as_ref()
+            .map(|summary| summary.post_initialization_frame_count),
+        code_table_count: initialized.as_ref().map(|summary| summary.code_table_count),
+        connection_count: initialized
+            .as_ref()
+            .map(|summary| summary.connection_count)
+            .unwrap_or(shadows.len()),
+        receive_list_codes: initialized
+            .as_ref()
+            .map(|summary| summary.receive_list_codes),
+        slots: initialized
+            .as_ref()
+            .map(|summary| summary.slots.clone())
+            .unwrap_or_default(),
+        lane: official_5188_lane(connected, initialized.is_some(), shadow.as_ref()),
+        business_decoder: "opaque-evidence-only",
+        shadow,
+        shadows,
+    }
+}
+
+fn official_5188_shadow_snapshots(auth: &AuthRuntime) -> Vec<Official5188ShadowSnapshot> {
+    auth.official_5188_shadow
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .iter()
+        .map(Official5188ShadowReader::snapshot)
+        .collect()
+}
+
+fn merge_official_5188_shadow_snapshots(
+    snapshots: &[Official5188ShadowSnapshot],
+) -> Option<Official5188ShadowSnapshot> {
+    let first = snapshots.first()?.clone();
+    Some(snapshots.iter().skip(1).fold(first, |mut acc, next| {
+        acc.running |= next.running;
+        acc.frames_received += next.frames_received;
+        acc.application_bytes_received += next.application_bytes_received;
+        acc.delta_2704_frames += next.delta_2704_frames;
+        acc.bulk_3e04_frames += next.bulk_3e04_frames;
+        acc.receive_terminations += next.receive_terminations;
+        acc.decoder_seed_records += next.decoder_seed_records;
+        acc.decoder_attempted_frames += next.decoder_attempted_frames;
+        acc.decoder_decoded_frames += next.decoder_decoded_frames;
+        acc.decoder_partial_frames += next.decoder_partial_frames;
+        acc.decoder_failed_frames += next.decoder_failed_frames;
+        for (kind, count) in &next.decoder_error_kinds {
+            *acc.decoder_error_kinds.entry(kind.clone()).or_insert(0) += count;
+        }
+        for (mode, count) in &next.decoder_baseline_modes {
+            *acc.decoder_baseline_modes.entry(mode.clone()).or_insert(0) += count;
+        }
+        for (kind, sample) in &next.decoder_error_samples {
+            if acc.decoder_error_samples.len() < 32 {
+                acc.decoder_error_samples
+                    .entry(kind.clone())
+                    .or_insert_with(|| sample.clone());
+            }
+        }
+        acc.decoder_decoded_records += next.decoder_decoded_records;
+        acc.decoder_omitted_tail_records += next.decoder_omitted_tail_records;
+        acc.decoder_oem_state_symbols += next.decoder_oem_state_symbols;
+        acc.decoder_oem_state_updates += next.decoder_oem_state_updates;
+        acc.decoder_missing_previous_close_seeds += next.decoder_missing_previous_close_seeds;
+        acc.decoder_rejected_public_quotes += next.decoder_rejected_public_quotes;
+        if next.decoder_last_error.is_some() {
+            acc.decoder_last_error = next.decoder_last_error.clone();
+        }
+        if next.last_error.is_some() {
+            acc.last_error = next.last_error.clone();
+        }
+        acc.retained.frame_count += next.retained.frame_count;
+        acc.retained.byte_count += next.retained.byte_count;
+        acc.retained.dropped_frames += next.retained.dropped_frames;
+        for (kind, count) in &next.retained.wire_kind_counts {
+            *acc.retained
+                .wire_kind_counts
+                .entry(kind.clone())
+                .or_insert(0) += count;
+        }
+        if next.retained.latest_wire_kind.is_some() {
+            acc.retained.latest_wire_kind = next.retained.latest_wire_kind.clone();
+            acc.retained.latest_payload_len = next.retained.latest_payload_len;
+        }
+        acc
+    }))
+}
+
+fn take_official_5188_shadows(auth: &AuthRuntime) -> Vec<Official5188ShadowReader> {
+    std::mem::take(
+        &mut *auth
+            .official_5188_shadow
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()),
+    )
+}
+
+async fn stop_official_5188_shadows(
+    readers: Vec<Official5188ShadowReader>,
+) -> Result<(), ApiError> {
+    if readers.is_empty() {
+        return Ok(());
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut first_error = None;
+        for mut reader in readers {
+            if let Err(error) = reader.stop() {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    })
+    .await
+    .map_err(|err| ApiError::internal(format!("5188 shadow stop worker failed: {err}")))?
+    .map_err(ApiError::internal)
+}
+
+fn load_official_5188_receive_codes() -> Result<std::collections::BTreeSet<String>, String> {
+    let bytes = std::fs::read(DEFAULT_WINE_CODE_WORKLIST_PATH).map_err(|error| {
+        format!(
+            "read Wine receive list {} failed: {error}",
+            DEFAULT_WINE_CODE_WORKLIST_PATH
+        )
+    })?;
+    parse_wine_code_worklist(&bytes)
+        .map(|entries| entries.into_iter().map(|entry| entry.symbol).collect())
+        .map_err(|error| format!("parse Wine receive list failed: {error}"))
+}
+
+async fn official_5188_status(State(state): State<AppState>) -> Json<Official5188StatusResponse> {
+    Json(official_5188_status_from_auth(&state.auth))
+}
+
+#[derive(Serialize)]
+struct Official5188ShadowQuotesResponse {
+    source: &'static str,
+    publication: &'static str,
+    quote_count: usize,
+    quotes: Vec<netzip_fullpull::Official5188PublicQuote>,
+}
+
+async fn official_5188_shadow_quotes(
+    State(state): State<AppState>,
+) -> Json<Official5188ShadowQuotesResponse> {
+    let readers = state
+        .auth
+        .official_5188_shadow
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut by_symbol = BTreeMap::new();
+    for quote in readers
+        .iter()
+        .flat_map(Official5188ShadowReader::public_quotes)
+    {
+        by_symbol.insert((quote.market.clone(), quote.code.clone()), quote);
+    }
+    let quotes = by_symbol.into_values().collect::<Vec<_>>();
+    Json(Official5188ShadowQuotesResponse {
+        source: "netzipRustOfficial5188Shadow",
+        publication: "disabled",
+        quote_count: quotes.len(),
+        quotes,
+    })
+}
+
+async fn official_5188_connect(
+    State(state): State<AppState>,
+) -> Result<Json<Official5188StatusResponse>, ApiError> {
+    if !state
+        .auth
+        .official_5188_shadow
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .is_empty()
+    {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: "stop the existing 5188 shadow readers before connecting again".to_string(),
+        });
+    }
+    *state
+        .auth
+        .official_5188_session
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+    *state
+        .auth
+        .official_5188_init
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+    let receive_codes = load_official_5188_receive_codes().unwrap_or_default();
+    let receive_list_codes = receive_codes.len();
+    let auth = state.auth.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut control = auth
+            .control_session
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let control = control
+            .as_mut()
+            .ok_or_else(|| "7100 control session is not retained".to_string())?;
+        control
+            .connect_and_initialize_official_5188_slots(Duration::from_secs(20), &receive_codes)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| ApiError::internal(format!("5188 connect worker failed: {err}")))?
+    .map_err(ApiError::bad_request)?;
+    if outcome.is_empty() {
+        return Err(ApiError::bad_request(
+            "5188 connect opened no subscription slots",
+        ));
+    }
+    let mut readers = Vec::with_capacity(outcome.len());
+    let mut slots = Vec::with_capacity(outcome.len());
+    let mut post_initialization_frame_count = 0usize;
+    let mut code_table_count = 0usize;
+    for slot_session in outcome {
+        post_initialization_frame_count = slot_session
+            .initialization
+            .initialization
+            .post_initialization_frame_count;
+        code_table_count = slot_session.initialization.code_tables.code_tables.len();
+        slots.push(Official5188SlotInitSummary {
+            slot: slot_session.slot,
+            login_number: slot_session.login_number,
+            subscription_entries: slot_session.subscription_entries,
+            post_initialization_frame_count,
+            code_table_count,
+        });
+        let code_tables = slot_session.initialization.code_tables.code_tables;
+        readers.push(
+            Official5188ShadowReader::start_with_code_tables(
+                slot_session.session,
+                OFFICIAL_5188_SHADOW_MAX_FRAMES,
+                OFFICIAL_5188_SHADOW_MAX_BYTES,
+                code_tables,
+            )
+            .map_err(ApiError::internal)?,
+        );
+    }
+    *state
+        .auth
+        .official_5188_init
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = Some(Official5188InitSummary {
+        post_initialization_frame_count,
+        code_table_count,
+        connection_count: readers.len(),
+        receive_list_codes,
+        slots,
+    });
+    *state
+        .auth
+        .official_5188_shadow
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = readers;
+    Ok(Json(official_5188_status_from_auth(&state.auth)))
+}
+
+async fn official_5188_shadow_start(
+    State(state): State<AppState>,
+) -> Result<Json<Official5188StatusResponse>, ApiError> {
+    if !state
+        .auth
+        .official_5188_shadow
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .is_empty()
+    {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: "5188 shadow readers already exist; stop them before restarting".to_string(),
+        });
+    }
+    let session = state
+        .auth
+        .official_5188_session
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .take()
+        .ok_or_else(|| {
+            ApiError::bad_request("5188 shadow start requires a pending connected session")
+        })?;
+    let reader = Official5188ShadowReader::start(
+        session,
+        OFFICIAL_5188_SHADOW_MAX_FRAMES,
+        OFFICIAL_5188_SHADOW_MAX_BYTES,
+    )
+    .map_err(ApiError::internal)?;
+    state
+        .auth
+        .official_5188_shadow
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push(reader);
+    Ok(Json(official_5188_status_from_auth(&state.auth)))
+}
+
+async fn official_5188_shadow_stop(
+    State(state): State<AppState>,
+) -> Result<Json<Official5188StatusResponse>, ApiError> {
+    stop_official_5188_shadows(take_official_5188_shadows(&state.auth)).await?;
+    Ok(Json(official_5188_status_from_auth(&state.auth)))
+}
+
+async fn official_5188_disconnect(
+    State(state): State<AppState>,
+) -> Json<Official5188StatusResponse> {
+    let _ = stop_official_5188_shadows(take_official_5188_shadows(&state.auth)).await;
+    *state
+        .auth
+        .official_5188_session
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+    *state
+        .auth
+        .official_5188_init
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+    Json(official_5188_status_from_auth(&state.auth))
 }
 
 async fn auth_login(State(state): State<AppState>) -> Result<Json<AuthLoginResponse>, ApiError> {
@@ -1850,15 +2672,44 @@ async fn auth_login(State(state): State<AppState>) -> Result<Json<AuthLoginRespo
             .unwrap_or_else(|err| err.into_inner());
         begin_auth_attempt(&mut status, started);
     }
+    *state
+        .auth
+        .control_session
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+    if let Err(error) = stop_official_5188_shadows(take_official_5188_shadows(&state.auth)).await {
+        *state
+            .auth
+            .login_in_progress
+            .lock()
+            .unwrap_or_else(|err| err.into_inner()) = false;
+        return Err(error);
+    }
+    *state
+        .auth
+        .official_5188_session
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+    *state
+        .auth
+        .official_5188_init
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
 
     let auth = state.auth.clone();
-    let result = tokio::task::spawn_blocking(move || run_authentication()).await;
+    let result = tokio::task::spawn_blocking(run_authentication).await;
     let outcome = match result {
-        Ok(Ok((probes, probe_errors, login))) => {
+        Ok(Ok((probes, probe_errors, session))) => {
+            let login = session.login_result().clone();
             let mut status = auth.state.lock().unwrap_or_else(|err| err.into_inner());
             status.probes = probes;
             status.probe_errors = probe_errors;
             apply_login_result(&mut status, login);
+            *auth
+                .control_session
+                .lock()
+                .unwrap_or_else(|err| err.into_inner()) = Some(session);
+            status.control_session_retained = true;
             status.phase = "succeeded".to_string();
             status.completed_at = Some(unix_timestamp());
             AuthLoginResponse {
@@ -1894,17 +2745,27 @@ async fn auth_login(State(state): State<AppState>) -> Result<Json<AuthLoginRespo
     Ok(Json(outcome))
 }
 
-fn run_authentication()
--> Result<(Vec<Auth7100ProbeResult>, Vec<String>, Auth7100LoginResult), String> {
+fn run_authentication() -> Result<
+    (
+        Vec<Auth7100ProbeResult>,
+        Vec<String>,
+        Auth7100ControlSession,
+    ),
+    String,
+> {
     let credentials = netzipapi_rust_demo::auth_credentials::load(None, None);
-    let password = credentials
-        .password
-        .ok_or_else(|| "1522 password is not configured in NETZIP_TDX_PASSWORD".to_string())?;
+    let password = credentials.password.ok_or_else(|| {
+        "authentication password is not configured in NETZIP_TDX_PASSWORD".to_string()
+    })?;
+    let host = std::env::var(AUTH_HOST_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_AUTH_HOST.to_string());
     let mut probes = Vec::new();
     let mut probe_errors = Vec::new();
     for port in DEFAULT_PROBE_PORTS {
         let config = Auth7100ClientConfig {
-            host: DEFAULT_AUTH_HOST.to_string(),
+            host: host.clone(),
             port,
             account: credentials.account.clone(),
             password: password.clone(),
@@ -1915,16 +2776,22 @@ fn run_authentication()
             Err(error) => probe_errors.push(format!("{port}: {error}")),
         }
     }
+    let port = std::env::var(AUTH_PORT_ENV)
+        .ok()
+        .map(|value| value.parse::<u16>())
+        .transpose()
+        .map_err(|error| format!("invalid {AUTH_PORT_ENV}: {error}"))?
+        .unwrap_or(DEFAULT_LOGIN_PORT);
     let config = Auth7100ClientConfig {
-        host: DEFAULT_AUTH_HOST.to_string(),
-        port: DEFAULT_LOGIN_PORT,
+        host,
+        port,
         account: credentials.account,
         password,
         timeout: Duration::from_secs(8),
     };
-    let login =
-        login_auth_6100_with_verified_dictionary(&config).map_err(|error| error.to_string())?;
-    Ok((probes, probe_errors, login))
+    let session = connect_auth_control_with_verified_dictionary(&config)
+        .map_err(|error| error.to_string())?;
+    Ok((probes, probe_errors, session))
 }
 
 fn begin_auth_attempt(status: &mut AuthStatusResponse, started: u64) {
@@ -1943,6 +2810,7 @@ fn begin_auth_attempt(status: &mut AuthStatusResponse, started: u64) {
     status.active_server_count = 0;
     status.selected_quote_endpoint = None;
     status.selected_7709_endpoint = None;
+    status.control_session_retained = false;
     status.last_error = None;
     status.attempt_started_at = Some(started);
     status.completed_at = None;
@@ -1979,18 +2847,28 @@ fn unix_timestamp() -> u64 {
 
 async fn capabilities() -> Json<CapabilitiesResponse> {
     Json(CapabilitiesResponse {
-        service: "netzip-rs",
+        service: SERVICE_NAME,
+        public_service_endpoints: public_service_endpoints(),
+        public_service_policy: "quoteNetzipRs exposes the native full-push publisher through the hqw worklist endpoint; 7709 remains the currently verified quote acquisition path while official 5188 business-field parity is validated. Supplement and research endpoints stay internal/diagnostic.",
         stable_endpoints: stable_endpoints(),
         linux_native_endpoints: linux_native_endpoints(),
         windows_bridge_endpoints: windows_bridge_endpoints(),
         research_endpoints: research_endpoints(),
         recommended_delivery_tracks: recommended_delivery_tracks(),
-        pure_rust_linux_feasibility: "partial_now_full_replacement_pending",
-        pure_rust_linux_summary: "纯 Rust + Linux 已可覆盖 7709 行情/K线/F10 与 FIN/0547 解析；要完整替代 Windows 主链，仍卡在 7100 登录后壳层与上游初始化对象链的纯 Rust 闭环。",
+        pure_rust_linux_feasibility: "native_full_push_publisher_active_5188_field_parity_pending",
+        pure_rust_linux_summary: "纯 Rust + Linux 已运行 native full-push 发布器，并覆盖 7709 行情、补数、K线、F10 与 FIN/0547 解析；官方 5188 的持续业务字段与 Wine OEM_REPORT 的最终 parity 仍在验收。",
         pure_rust_linux_hard_blockers: pure_rust_linux_hard_blockers(),
         pure_rust_linux_non_blocking_gaps: pure_rust_linux_non_blocking_gaps(),
         fin_urls: [SH_FIN_URL, SZ_FIN_URL],
     })
+}
+
+fn public_service_endpoints() -> Vec<&'static str> {
+    vec![
+        "GET /health",
+        "GET /api/capabilities",
+        "POST /api/hqw/push-worklist",
+    ]
 }
 
 fn stable_endpoints() -> Vec<&'static str> {
@@ -2003,6 +2881,9 @@ fn stable_endpoints() -> Vec<&'static str> {
         "GET /api/auth/status",
         "POST /api/auth/login",
         "GET /api/capabilities",
+        "GET /api/fullpull/official-5188/status",
+        "POST /api/fullpull/official-5188/connect",
+        "POST /api/fullpull/official-5188/disconnect",
         "GET /api/quotes",
         "POST /api/hqw/publish",
         "POST /api/hqw/publish-worklist",
@@ -2021,6 +2902,15 @@ fn stable_endpoints() -> Vec<&'static str> {
         "POST /api/tdx7709/live-quote",
         "POST /api/tdx7709/snapshot",
         "POST /api/tdx7709/kline",
+        "POST /api/supplement/kline",
+        "POST /api/supplement/kline/oem",
+        "POST /api/supplement/code-table",
+        "POST /api/supplement/code-table/oem",
+        "POST /api/supplement/split/oem",
+        "POST /api/supplement/finance/oem",
+        "POST /api/supplement/file/oem",
+        "POST /api/supplement/realtime",
+        "POST /api/supplement/realtime/oem",
         "POST /api/tdx7709/f10/categories",
         "POST /api/tdx7709/f10/content",
         "GET /api/tdx7709/bootstrap-plan",
@@ -2046,6 +2936,7 @@ fn stable_endpoints() -> Vec<&'static str> {
         "POST /api/quote/0547/query",
         "POST /api/quote/0547/extra-profile",
         "POST /api/debug/pcap-summary",
+        "POST /api/debug/pcap-5188-summary",
         "POST /api/debug/stream-analyze",
     ]
 }
@@ -2069,6 +2960,15 @@ fn linux_native_endpoints() -> Vec<&'static str> {
         "POST /api/tdx7709/live-quote",
         "POST /api/tdx7709/snapshot",
         "POST /api/tdx7709/kline",
+        "POST /api/supplement/kline",
+        "POST /api/supplement/kline/oem",
+        "POST /api/supplement/code-table",
+        "POST /api/supplement/code-table/oem",
+        "POST /api/supplement/split/oem",
+        "POST /api/supplement/finance/oem",
+        "POST /api/supplement/file/oem",
+        "POST /api/supplement/realtime",
+        "POST /api/supplement/realtime/oem",
         "POST /api/tdx7709/f10/categories",
         "POST /api/tdx7709/f10/content",
         "GET /api/tdx7709/bootstrap-plan",
@@ -2076,6 +2976,7 @@ fn linux_native_endpoints() -> Vec<&'static str> {
         "POST /api/quote/0547/query",
         "POST /api/quote/0547/extra-profile",
         "POST /api/debug/pcap-summary",
+        "POST /api/debug/pcap-5188-summary",
         "POST /api/debug/stream-analyze",
     ]
 }
@@ -2095,6 +2996,9 @@ fn windows_bridge_endpoints() -> Vec<&'static str> {
 
 fn research_endpoints() -> Vec<&'static str> {
     vec![
+        "GET /api/fullpull/official-5188/shadow/quotes",
+        "POST /api/fullpull/official-5188/shadow/start",
+        "POST /api/fullpull/official-5188/shadow/stop",
         "GET /api/debug/tdx118-dump-compare-plan",
         "POST /api/debug/answer-summary",
         "POST /api/debug/blob-compare",
@@ -2110,6 +3014,7 @@ fn research_endpoints() -> Vec<&'static str> {
         "POST /api/debug/quote-0547-decode",
         "POST /api/debug/quote-0547-query",
         "POST /api/debug/quote-0547-extra-profile",
+        "POST /api/debug/pcap-5188-summary",
     ]
 }
 
@@ -3008,8 +3913,10 @@ async fn auth_7100_flow_matrix_for_path(
     Json(request): Json<Auth7100PathFilterRequest>,
 ) -> Result<Json<Auth7100FlowMatrixResponse>, ApiError> {
     let path = request.path.clone();
+    let service_port = request.service_port.unwrap_or(7100);
+    validate_auth_flow_service_port(service_port).map_err(ApiError::bad_request)?;
     let analysis = tokio::task::spawn_blocking(move || {
-        analyze_auth_7100_flow_matrix(&path).map_err(|err| {
+        netzipapi_rust_demo::analyze_auth_flow_matrix_for_port(&path, service_port).map_err(|err| {
             ApiError::bad_request(format!("analyze auth 7100 flow matrix failed: {err}"))
         })
     })
@@ -3018,6 +3925,14 @@ async fn auth_7100_flow_matrix_for_path(
     let analysis = filter_auth_7100_flow_matrix(analysis, &request);
 
     Ok(Json(Auth7100FlowMatrixResponse { analysis }))
+}
+
+fn validate_auth_flow_service_port(port: u16) -> Result<(), String> {
+    if port == 7709 {
+        Err("auth flow matrix does not analyze supplement-only port 7709".to_string())
+    } else {
+        Ok(())
+    }
 }
 
 async fn local_2000_log_scan(
@@ -3366,7 +4281,7 @@ async fn fin_getter_specs_api() -> Result<Json<FinGetterSpecsResponse>, ApiError
 async fn tdx7709_sync(
     Json(request): Json<Tdx7709SyncRequest>,
 ) -> Result<Json<Tdx7709SyncResponse>, ApiError> {
-    let host = request.host.unwrap_or_else(|| "120.195.71.160".to_string());
+    let host = request.host.unwrap_or_default();
     let port = request.port.unwrap_or(7709);
     let read_timeout = request.read_timeout_ms.unwrap_or(1_000);
     let connect_timeout = request.connect_timeout_ms.unwrap_or(5_000);
@@ -3394,7 +4309,7 @@ async fn tdx7709_sync(
 async fn tdx7709_code_query(
     Json(request): Json<Tdx7709CodeQueryRequest>,
 ) -> Result<Json<Tdx7709CodeQueryResponse>, ApiError> {
-    let host = request.host.unwrap_or_else(|| "120.195.71.160".to_string());
+    let host = request.host.unwrap_or_default();
     let port = request.port.unwrap_or(7709);
     let query = request.query.unwrap_or_default();
     let limit = request.limit.unwrap_or(20).clamp(1, 200);
@@ -3448,7 +4363,7 @@ async fn tdx7709_code_query(
 async fn tdx7709_live_quote(
     Json(request): Json<Tdx7709LiveQuoteRequest>,
 ) -> Result<Json<Tdx7709LiveQuoteResponse>, ApiError> {
-    let host = request.host.unwrap_or_else(|| "120.195.71.160".to_string());
+    let host = request.host.unwrap_or_default();
     let port = request.port.unwrap_or(7709);
     let limit = request.limit.unwrap_or(20).clamp(1, 200);
     let read_timeout = request.read_timeout_ms.unwrap_or(1_000);
@@ -3611,6 +4526,8 @@ async fn hqw_push_worklist(
             "bj_poll_interval_secs must be between 1 and 30",
         ));
     }
+    let worker_count = request.worker_count.unwrap_or(64);
+    validated_native_push_worker_count(worker_count, usize::MAX)?;
     let publish = request.publish.unwrap_or(false);
     if publish && std::env::var("NETZIP_NATIVE_PUSH_PUBLISH_ENABLE").as_deref() != Ok("1") {
         return Err(ApiError::bad_request(
@@ -3632,6 +4549,7 @@ async fn hqw_push_worklist(
             Duration::from_secs(duration_secs),
             Duration::from_secs(audit_interval_secs),
             Duration::from_secs(bj_poll_interval_secs),
+            worker_count,
             publish,
         )
     })
@@ -3724,6 +4642,436 @@ async fn tdx7709_kline(
     .map_err(|err| ApiError::internal(format!("join error: {err}")))??;
 
     Ok(Json(response))
+}
+
+async fn tdx7709_supplement(
+    Json(request): Json<SupplementHttpRequest>,
+) -> Result<Json<SupplementHttpResponse>, ApiError> {
+    validate_supplement(&request.supplement)
+        .map_err(|error| ApiError::bad_request(format!("invalid supplement request: {error}")))?;
+
+    let host = request
+        .host
+        .unwrap_or_else(|| netzipapi_rust_demo::TDX7709_DEFAULT_HOST.to_string());
+    let port = request
+        .port
+        .unwrap_or(netzipapi_rust_demo::TDX7709_DEFAULT_PORT);
+    let read_timeout = request.read_timeout_ms.unwrap_or(1_000);
+    let connect_timeout = request.connect_timeout_ms.unwrap_or(5_000);
+    let settle_ms = request.settle_ms.unwrap_or(300);
+    let supplement = request.supplement;
+
+    let response = tokio::task::spawn_blocking(move || {
+        let config = build_tdx7709_config(&host, port, read_timeout, connect_timeout, settle_ms);
+        let report = fetch_supplement(&config, &supplement)
+            .map_err(|error| ApiError::internal(format!("7709 supplement failed: {error}")))?;
+        Ok::<_, ApiError>(SupplementHttpResponse { host, port, report })
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+
+    Ok(Json(response))
+}
+
+async fn tdx7709_code_table_supplement(
+    Json(request): Json<CodeTableSupplementHttpRequest>,
+) -> Result<Json<CodeTableSupplementHttpResponse>, ApiError> {
+    let host = request
+        .host
+        .unwrap_or_else(|| netzipapi_rust_demo::TDX7709_DEFAULT_HOST.to_string());
+    let port = request
+        .port
+        .unwrap_or(netzipapi_rust_demo::TDX7709_DEFAULT_PORT);
+    let read_timeout = request.read_timeout_ms.unwrap_or(1_000);
+    let connect_timeout = request.connect_timeout_ms.unwrap_or(5_000);
+    let settle_ms = request.settle_ms.unwrap_or(300);
+    let worklist_path = request
+        .worklist_path
+        .unwrap_or_else(|| DEFAULT_WINE_CODE_WORKLIST_PATH.to_string());
+
+    let response = tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(&worklist_path).map_err(|error| {
+            ApiError::bad_request(format!(
+                "read Wine code worklist {} failed: {error}",
+                worklist_path
+            ))
+        })?;
+        let entries = parse_wine_code_worklist(&bytes).map_err(|error| {
+            ApiError::bad_request(format!("parse Wine code worklist failed: {error}"))
+        })?;
+        let config = build_tdx7709_config(&host, port, read_timeout, connect_timeout, settle_ms);
+        let session = Tdx7709Session::open(&config)
+            .map_err(|error| ApiError::internal(format!("open 7709 session failed: {error}")))?;
+        let report = join_wine_code_table(&entries, &session.sync_result().records);
+        Ok::<_, ApiError>(CodeTableSupplementHttpResponse {
+            host,
+            port,
+            worklist_path,
+            source_protocol: "netzip-rust-wine-worklist-7709-code-table.v1",
+            report,
+        })
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+
+    Ok(Json(response))
+}
+
+async fn tdx7709_code_table_supplement_oem(
+    Json(request): Json<OemCodeTableSupplementHttpRequest>,
+) -> Result<Response, ApiError> {
+    let market = request.market.trim().to_ascii_uppercase();
+    let market_contract = oem_code_table_market(&market)?;
+    let host = request
+        .host
+        .unwrap_or_else(|| netzipapi_rust_demo::TDX7709_DEFAULT_HOST.to_string());
+    let port = request
+        .port
+        .unwrap_or(netzipapi_rust_demo::TDX7709_DEFAULT_PORT);
+    let read_timeout = request.read_timeout_ms.unwrap_or(1_000);
+    let connect_timeout = request.connect_timeout_ms.unwrap_or(5_000);
+    let settle_ms = request.settle_ms.unwrap_or(300);
+    let worklist_path = request
+        .worklist_path
+        .unwrap_or_else(|| DEFAULT_WINE_CODE_WORKLIST_PATH.to_string());
+    let ask_id = request.ask_id.unwrap_or(0);
+
+    let packet = tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(&worklist_path).map_err(|error| {
+            ApiError::bad_request(format!(
+                "read Wine code worklist {} failed: {error}",
+                worklist_path
+            ))
+        })?;
+        let entries = parse_wine_code_worklist(&bytes).map_err(|error| {
+            ApiError::bad_request(format!("parse Wine code worklist failed: {error}"))
+        })?;
+        let config = build_tdx7709_config(&host, port, read_timeout, connect_timeout, settle_ms);
+        let mut session = Tdx7709Session::open(&config)
+            .map_err(|error| ApiError::internal(format!("open 7709 session failed: {error}")))?;
+        let report = join_wine_code_table(&entries, &session.sync_result().records);
+        let date_probe = report
+            .records
+            .iter()
+            .find(|record| record.market == market_contract.native_market)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "Wine worklist and 7709 code table have no matched {market} records"
+                ))
+            })?;
+        let latest_daily = session
+            .request_kline(date_probe.market, &date_probe.code, 4, 0, 1)
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "7709 latest daily K-line date probe failed for {}: {error}",
+                    date_probe.symbol
+                ))
+            })?;
+        let latest_bar = latest_daily.bars.last().ok_or_else(|| {
+            ApiError::internal(format!(
+                "7709 latest daily K-line date probe returned no bars for {}",
+                date_probe.symbol
+            ))
+        })?;
+        let date = wine_market_date(&latest_bar.datetime)?;
+        encode_oem_code_table_report(&report, &market, date, ask_id)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], packet).into_response())
+}
+
+async fn wine_split_supplement_oem(
+    Json(request): Json<OemSplitSupplementHttpRequest>,
+) -> Result<Response, ApiError> {
+    let worklist_path = request
+        .worklist_path
+        .unwrap_or_else(|| DEFAULT_WINE_CODE_WORKLIST_PATH.to_string());
+    let pwr_path = request
+        .pwr_path
+        .unwrap_or_else(|| DEFAULT_WINE_PWR_V8_PATH.to_string());
+    let realtime_path = request
+        .realtime_path
+        .unwrap_or_else(|| DEFAULT_WINE_REALTIME_PATH.to_string());
+    let ask_id = request.ask_id.unwrap_or(0);
+
+    let packet = tokio::task::spawn_blocking(move || {
+        let worklist_bytes = std::fs::read(&worklist_path).map_err(|error| {
+            ApiError::bad_request(format!(
+                "read Wine code worklist {} failed: {error}",
+                worklist_path
+            ))
+        })?;
+        let entries = parse_wine_code_worklist(&worklist_bytes).map_err(|error| {
+            ApiError::bad_request(format!("parse Wine code worklist failed: {error}"))
+        })?;
+        let realtime_bytes = std::fs::read(&realtime_path).map_err(|error| {
+            ApiError::bad_request(format!(
+                "read Wine realtime.dat {} failed: {error}",
+                realtime_path
+            ))
+        })?;
+        let realtime = parse_wine_realtime_dat(&realtime_bytes).map_err(|error| {
+            ApiError::bad_request(format!("parse Wine realtime.dat failed: {error}"))
+        })?;
+        let entries = filter_wine_code_worklist_by_realtime(&entries, &realtime);
+        let pwr_bytes = std::fs::read(&pwr_path).map_err(|error| {
+            ApiError::bad_request(format!("read Wine PWR V8 {} failed: {error}", pwr_path))
+        })?;
+        let report = parse_wine_pwr_v8(&pwr_bytes, &entries)
+            .map_err(|error| ApiError::bad_request(format!("parse Wine PWR V8 failed: {error}")))?;
+        encode_oem_split_report(&report, ask_id)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], packet).into_response())
+}
+
+async fn wine_finance_supplement_oem(
+    Json(request): Json<OemFinanceSupplementHttpRequest>,
+) -> Result<Response, ApiError> {
+    let worklist_path = request
+        .worklist_path
+        .unwrap_or_else(|| DEFAULT_WINE_CODE_WORKLIST_PATH.to_string());
+    let fin_path = request
+        .fin_path
+        .unwrap_or_else(|| DEFAULT_WINE_FIN_V8_PATH.to_string());
+    let realtime_path = request
+        .realtime_path
+        .unwrap_or_else(|| DEFAULT_WINE_REALTIME_PATH.to_string());
+    let ask_id = request.ask_id.unwrap_or(0);
+
+    let packet = tokio::task::spawn_blocking(move || {
+        let worklist_bytes = std::fs::read(&worklist_path).map_err(|error| {
+            ApiError::bad_request(format!(
+                "read Wine code worklist {} failed: {error}",
+                worklist_path
+            ))
+        })?;
+        let entries = parse_wine_code_worklist(&worklist_bytes).map_err(|error| {
+            ApiError::bad_request(format!("parse Wine code worklist failed: {error}"))
+        })?;
+        let realtime_bytes = std::fs::read(&realtime_path).map_err(|error| {
+            ApiError::bad_request(format!(
+                "read Wine realtime.dat {} failed: {error}",
+                realtime_path
+            ))
+        })?;
+        let realtime = parse_wine_realtime_dat(&realtime_bytes).map_err(|error| {
+            ApiError::bad_request(format!("parse Wine realtime.dat failed: {error}"))
+        })?;
+        let entries = filter_wine_code_worklist_by_realtime(&entries, &realtime);
+        let fin_bytes = std::fs::read(&fin_path).map_err(|error| {
+            ApiError::bad_request(format!("read Wine FIN V8 {} failed: {error}", fin_path))
+        })?;
+        let report = parse_wine_fin_v8(&fin_bytes, &entries)
+            .map_err(|error| ApiError::bad_request(format!("parse Wine FIN V8 failed: {error}")))?;
+        encode_oem_finance_report(&report, ask_id)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], packet).into_response())
+}
+
+async fn wine_file_supplement_oem(
+    Json(request): Json<OemFileSupplementHttpRequest>,
+) -> Result<Response, ApiError> {
+    let file_path = request
+        .file_path
+        .unwrap_or_else(|| DEFAULT_WINE_FIN_V6_PATH.to_string());
+    let label = request
+        .label
+        .unwrap_or_else(|| DEFAULT_WINE_FIN_V6_LABEL.to_string());
+    let ask_id = request.ask_id.unwrap_or(0);
+
+    let packet = tokio::task::spawn_blocking(move || {
+        let payload = std::fs::read(&file_path).map_err(|error| {
+            ApiError::bad_request(format!("read Wine FIN V6 {} failed: {error}", file_path))
+        })?;
+        encode_oem_file_payload(&label, &payload, ask_id)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], packet).into_response())
+}
+
+fn load_wine_realtime_report(path: &str) -> Result<WineRealtimeDatReport, ApiError> {
+    let bytes = std::fs::read(path).map_err(|error| {
+        ApiError::bad_request(format!("read Wine realtime.dat {path} failed: {error}"))
+    })?;
+    parse_wine_realtime_dat(&bytes)
+        .map_err(|error| ApiError::bad_request(format!("parse Wine realtime.dat failed: {error}")))
+}
+
+fn load_wine_realtime_oem_packet(
+    realtime_path: &str,
+    fin_path: &str,
+    ask_id: u32,
+) -> Result<Vec<u8>, ApiError> {
+    let realtime = load_wine_realtime_report(realtime_path)?;
+    let entries = realtime
+        .records
+        .iter()
+        .filter(|record| record.time != 0)
+        .enumerate()
+        .map(|(index, record)| {
+            Ok(netzip_supplement::WineCodeEntry {
+                ordinal: u32::try_from(index + 1).map_err(|_| {
+                    ApiError::internal(format!(
+                        "Wine realtime record ordinal overflows u32: {}",
+                        index + 1
+                    ))
+                })?,
+                symbol: record.symbol.clone(),
+                name: record.name.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let fin_bytes = std::fs::read(fin_path).map_err(|error| {
+        ApiError::bad_request(format!("read Wine FIN V8 {fin_path} failed: {error}"))
+    })?;
+    let finance = parse_wine_fin_v8(&fin_bytes, &entries)
+        .map_err(|error| ApiError::bad_request(format!("parse Wine FIN V8 failed: {error}")))?;
+    encode_oem_realtime_report(&realtime, &finance, ask_id)
+}
+
+async fn wine_realtime_supplement(
+    Json(request): Json<RealtimeSupplementHttpRequest>,
+) -> Result<Json<WineRealtimeDatReport>, ApiError> {
+    let path = request
+        .realtime_path
+        .unwrap_or_else(|| DEFAULT_WINE_REALTIME_PATH.to_string());
+    let report = tokio::task::spawn_blocking(move || load_wine_realtime_report(&path))
+        .await
+        .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+    Ok(Json(report))
+}
+
+async fn wine_realtime_supplement_oem(
+    Json(request): Json<OemRealtimeSupplementHttpRequest>,
+) -> Result<Response, ApiError> {
+    let realtime_path = request
+        .realtime_path
+        .unwrap_or_else(|| DEFAULT_WINE_REALTIME_PATH.to_string());
+    let fin_path = request
+        .fin_path
+        .unwrap_or_else(|| DEFAULT_WINE_FIN_V8_PATH.to_string());
+    let ask_id = request.ask_id.unwrap_or(0);
+    let packet = tokio::task::spawn_blocking(move || {
+        load_wine_realtime_oem_packet(&realtime_path, &fin_path, ask_id)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], packet).into_response())
+}
+
+async fn tdx7709_supplement_oem(
+    Json(request): Json<OemSupplementHttpRequest>,
+) -> Result<Response, ApiError> {
+    let normalized = normalize_live_quote_symbol(&request.symbol).map_err(ApiError::bad_request)?;
+    let count = request
+        .count
+        .unwrap_or_else(|| request.period.default_count());
+    let power = request.power.unwrap_or(0);
+    if !(-1..=1).contains(&power) {
+        return Err(ApiError::bad_request("power must be -1, 0, or 1"));
+    }
+    let mut counts = SupplementCounts::default();
+    match request.period {
+        SupplementPeriod::Daily => counts.daily = Some(count),
+        SupplementPeriod::FiveMinute => counts.five_minute = Some(count),
+        SupplementPeriod::OneMinute => counts.one_minute = Some(count),
+    }
+    let supplement = SupplementRequest {
+        symbols: vec![normalized.symbol.clone()],
+        periods: vec![request.period],
+        counts,
+        page_size: request.page_size,
+        interval_ms: request.interval_ms,
+        continue_on_error: false,
+    };
+    validate_supplement(&supplement)
+        .map_err(|error| ApiError::bad_request(format!("invalid supplement request: {error}")))?;
+
+    let host = request
+        .host
+        .unwrap_or_else(|| netzipapi_rust_demo::TDX7709_DEFAULT_HOST.to_string());
+    let port = request
+        .port
+        .unwrap_or(netzipapi_rust_demo::TDX7709_DEFAULT_PORT);
+    let read_timeout = request.read_timeout_ms.unwrap_or(1_000);
+    let connect_timeout = request.connect_timeout_ms.unwrap_or(5_000);
+    let settle_ms = request.settle_ms.unwrap_or(300);
+    let name_override = request.name;
+    let ask_id = request.ask_id.unwrap_or(0);
+
+    let packet = tokio::task::spawn_blocking(move || {
+        let config = build_tdx7709_config(&host, port, read_timeout, connect_timeout, settle_ms);
+        let report = fetch_supplement(&config, &supplement)
+            .map_err(|error| ApiError::internal(format!("7709 supplement failed: {error}")))?;
+        let item = report.items.into_iter().next().ok_or_else(|| {
+            ApiError::internal("7709 supplement returned no item for OEM encoding")
+        })?;
+        encode_oem_kline_item(item, name_override, ask_id, power)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("join error: {error}")))??;
+
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], packet).into_response())
+}
+
+fn encode_oem_kline_item(
+    item: SupplementItemResult,
+    name_override: Option<String>,
+    ask_id: u32,
+    power: i8,
+) -> Result<Vec<u8>, ApiError> {
+    let SupplementItemResult {
+        symbol,
+        name,
+        volume_unit,
+        period,
+        error,
+        bars,
+        ..
+    } = item;
+    if let Some(error) = error {
+        return Err(ApiError::internal(error));
+    }
+    let name = name_override
+        .or(name)
+        .ok_or_else(|| ApiError::internal(format!("code table has no name for {symbol}")))?;
+    let instrument = InstrumentId::parse(&symbol).map_err(|error| {
+        ApiError::internal(format!("OEM instrument conversion failed: {error}"))
+    })?;
+    let bars = bars
+        .into_iter()
+        .map(|bar| {
+            Ok(KlineSnapshot {
+                timestamp: wine_kline_timestamp(period, &bar.datetime)?,
+                open: checked_oem_f32(bar.open, "open")?,
+                high: checked_oem_f32(bar.high, "high")?,
+                low: checked_oem_f32(bar.low, "low")?,
+                close: checked_oem_f32(bar.close, "close")?,
+                volume: wine_kline_volume(bar.volume, volume_unit)?,
+                amount: checked_oem_f32(bar.amount, "amount")?,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    encode_kline_packet(
+        oem_kline_type(period),
+        &instrument,
+        &name,
+        &bars,
+        ask_id,
+        power,
+    )
+    .map_err(|error| ApiError::internal(format!("OEM K-line encoding failed: {error}")))
 }
 
 async fn tdx7709_f10_categories(
@@ -4485,6 +5833,22 @@ async fn pcap_summary(
     .map_err(|err| ApiError::internal(format!("join error: {err}")))??;
 
     Ok(Json(response))
+}
+
+async fn pcap_5188_summary(
+    Json(request): Json<PcapSummaryRequest>,
+) -> Result<Json<Official5188PcapSummaryResponse>, ApiError> {
+    let path = PathBuf::from(request.path.clone());
+    let flows = tokio::task::spawn_blocking(move || {
+        scan_official_5188_pcap(&path).map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| ApiError::internal(format!("join error: {err}")))?
+    .map_err(|err| ApiError::bad_request(format!("5188 pcap summary failed: {err}")))?;
+    Ok(Json(Official5188PcapSummaryResponse {
+        path: request.path,
+        flows,
+    }))
 }
 
 async fn quote_frame_scan(
@@ -6348,6 +7712,18 @@ fn validated_full_push_worker_count(
     Ok(requested.min(batch_count))
 }
 
+fn validated_native_push_worker_count(
+    requested: usize,
+    shard_count: usize,
+) -> Result<usize, ApiError> {
+    if !(1..=64).contains(&requested) {
+        return Err(ApiError::bad_request(
+            "native push worker_count must be between 1 and 64",
+        ));
+    }
+    Ok(requested.min(shard_count))
+}
+
 fn shard_full_push_batches(
     batches: Vec<Vec<String>>,
     worker_count: usize,
@@ -6499,6 +7875,75 @@ fn split_full_push_upstreams(symbols: &[String]) -> (Vec<String>, Vec<String>) {
         .partition(|symbol| !symbol.starts_with("BJ"))
 }
 
+fn parse_native_push_endpoint_pool(value: Option<&str>) -> Result<Vec<Tdx7709Config>, ApiError> {
+    let value = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "NETZIP_TRANSITION_7709_ENDPOINTS is required; supply only endpoints obtained from the authenticated Netzip route",
+            )
+        })?;
+    let entries = value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (host, port) = match entry.rsplit_once(':') {
+                Some((host, port)) => {
+                    let port = port.parse::<u16>().map_err(|_| {
+                        ApiError::bad_request(format!(
+                            "invalid NETZIP_TRANSITION_7709_ENDPOINTS port in {entry}"
+                        ))
+                    })?;
+                    (host.trim(), port)
+                }
+                None => (entry, 7709),
+            };
+            if host.is_empty() || port == 0 {
+                return Err(ApiError::bad_request(format!(
+                    "invalid NETZIP_TRANSITION_7709_ENDPOINTS entry {entry}"
+                )));
+            }
+            if matches!(port, 5188 | 6100 | 7100) {
+                return Err(ApiError::bad_request(format!(
+                    "NETZIP_TRANSITION_7709_ENDPOINTS cannot contain official/auth port {port}; configure the 5188/7100 lane separately"
+                )));
+            }
+            Ok((host.to_string(), port))
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+
+    let mut seen = BTreeSet::new();
+    let configs = entries
+        .into_iter()
+        .filter(|entry| seen.insert(entry.clone()))
+        .map(|(host, port)| Tdx7709Config {
+            host,
+            port,
+            ..Tdx7709Config::default()
+        })
+        .collect::<Vec<_>>();
+    if configs.is_empty() {
+        return Err(ApiError::bad_request(
+            "NETZIP_TRANSITION_7709_ENDPOINTS contains no endpoints",
+        ));
+    }
+    Ok(configs)
+}
+
+fn native_push_endpoint_pool() -> Result<Vec<Tdx7709Config>, ApiError> {
+    parse_native_push_endpoint_pool(
+        std::env::var("NETZIP_TRANSITION_7709_ENDPOINTS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn native_push_endpoint_label(config: &Tdx7709Config) -> String {
+    format!("{}:{}", config.host, config.port)
+}
+
 fn build_bj_poll_plan(symbols: &[String], interval: Duration) -> Result<BjPollPlan, ApiError> {
     if interval < Duration::from_secs(1) || interval > Duration::from_secs(30) {
         return Err(ApiError::bad_request(
@@ -6534,13 +7979,9 @@ fn execute_bj_poll_loop(
     worklist_names: &BTreeMap<String, String>,
     gateway_addr: &str,
     current_token: Option<&str>,
+    endpoint: &Tdx7709Config,
 ) -> BjPollSummary {
-    let fallback_host =
-        std::env::var("NETZIP_TDX7709_FALLBACK_HOST").unwrap_or_else(|_| "139.9.43.31".to_string());
-    let config = Tdx7709Config {
-        host: fallback_host,
-        ..Tdx7709Config::default()
-    };
+    let config = endpoint.clone();
     let session_cache = Mutex::new(BTreeMap::new());
     let mut protocol = GatewayPublishProtocol::Auto;
     let mut summary = BjPollSummary::default();
@@ -6612,6 +8053,11 @@ enum NativePushReaderMessage {
     Failed {
         shard: usize,
         error: String,
+    },
+    Failover {
+        worker: usize,
+        from: String,
+        to: String,
     },
     RenewalSent,
 }
@@ -6711,6 +8157,7 @@ fn execute_hqw_push_worklist(
     duration: Duration,
     audit_interval: Duration,
     bj_poll_interval: Duration,
+    requested_worker_count: usize,
     publish: bool,
 ) -> Result<HqwPushWorklistResponse, ApiError> {
     let overall_started_at = Instant::now();
@@ -6719,14 +8166,26 @@ fn execute_hqw_push_worklist(
     let (primary_symbols, bj_symbols) = split_full_push_upstreams(&worklist.symbols);
     let bj_poll_plan = build_bj_poll_plan(&bj_symbols, bj_poll_interval)?;
     let batches = split_full_push_batches(&primary_symbols, 100)?;
+    let endpoint_pool = native_push_endpoint_pool()?;
     let code_table_lookup = if let Some(lookup) = NATIVE_PUSH_CODE_TABLE_LOOKUP.get() {
         lookup.clone()
     } else {
-        let code_table = Tdx7709Session::open(&Tdx7709Config::default())
-            .map_err(|err| {
-                ApiError::internal(format!("open push code-table session failed: {err}"))
-            })?
-            .sync_result();
+        let mut errors = Vec::new();
+        let code_table = endpoint_pool
+            .iter()
+            .find_map(|config| match Tdx7709Session::open(config) {
+                Ok(session) => Some(session.sync_result()),
+                Err(error) => {
+                    errors.push(format!("{}: {error}", native_push_endpoint_label(config)));
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "open push code-table session failed across endpoint pool: {}",
+                    errors.join("; ")
+                ))
+            })?;
         let lookup = build_quote_0547_code_table_lookup(&code_table.records);
         let _ = NATIVE_PUSH_CODE_TABLE_LOOKUP.set(lookup.clone());
         lookup
@@ -6735,6 +8194,8 @@ fn execute_hqw_push_worklist(
     let deadline = started_at + duration;
     let (sender, receiver) = mpsc::channel::<NativePushReaderMessage>();
     let shard_count = batches.len();
+    let worker_count = validated_native_push_worker_count(requested_worker_count, shard_count)?;
+    let worker_shards = shard_full_push_batches(batches, worker_count);
     let renewal_rate_gate = Arc::new(Mutex::new(RenewalRateGate::per_second(160)));
 
     std::thread::scope(|scope| -> Result<HqwPushWorklistResponse, ApiError> {
@@ -6745,6 +8206,10 @@ fn execute_hqw_push_worklist(
             let worklist_names = worklist.names.clone();
             let bj_gateway_addr = gateway_addr.clone();
             let bj_current_token = current_token.clone();
+            let bj_endpoint = endpoint_pool
+                .last()
+                .cloned()
+                .expect("explicit endpoint pool is non-empty");
             Some(scope.spawn(move || {
                 execute_bj_poll_loop(
                     &plan,
@@ -6754,55 +8219,81 @@ fn execute_hqw_push_worklist(
                     &worklist_names,
                     &bj_gateway_addr,
                     bj_current_token.as_deref(),
+                    &bj_endpoint,
                 )
             }))
         } else {
             None
         };
-        for (shard, symbols) in batches.into_iter().enumerate() {
+        for (worker, shards) in worker_shards.into_iter().enumerate() {
             let sender = sender.clone();
             let renewal_rate_gate = Arc::clone(&renewal_rate_gate);
+            let endpoint_pool = endpoint_pool.clone();
             scope.spawn(move || {
-                let request_items = symbols
-                    .iter()
-                    .filter_map(|symbol| normalize_live_quote_symbol(symbol).ok())
-                    .map(|item| Tdx7709QuoteRequestItem {
-                        market: item.market,
-                        code: item.code,
-                        token: 0,
+                let request_shards = shards
+                    .into_iter()
+                    .map(|(shard, symbols)| {
+                        let items = symbols
+                            .iter()
+                            .filter_map(|symbol| normalize_live_quote_symbol(symbol).ok())
+                            .map(|item| Tdx7709QuoteRequestItem {
+                                market: item.market,
+                                code: item.code,
+                                token: 0,
+                            })
+                            .collect::<Vec<_>>();
+                        (shard, items)
                     })
                     .collect::<Vec<_>>();
+                let shard_by_quote_key = request_shards
+                    .iter()
+                    .flat_map(|(shard, items)| {
+                        items
+                            .iter()
+                            .map(move |item| ((item.market, item.code.clone()), *shard))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                let fallback_shard = request_shards
+                    .first()
+                    .map(|(shard, _)| *shard)
+                    .unwrap_or(worker);
                 std::thread::sleep(
-                    native_push_shard_initial_delay(shard)
+                    native_push_shard_initial_delay(worker)
                         .min(deadline.saturating_duration_since(Instant::now())),
                 );
                 let mut consecutive_failures = 0usize;
+                let mut endpoint_index = 0usize;
                 while Instant::now() < deadline {
+                    let config = &endpoint_pool[endpoint_index];
                     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
                         let session_started_at = Instant::now();
-                        let mut session =
-                            Tdx7709Session::open_quote_only(&Tdx7709Config::default())?;
-                        let initial = session.request_live_quotes(&request_items)?;
+                        let mut session = Tdx7709Session::open_quote_only(config)?;
                         let mut renewal_scheduler = QuoteRenewalScheduler::default();
-                        let _ = sender.send(NativePushReaderMessage::Healthy { shard });
-                        for record in initial
-                            .quote_bodies
-                            .into_iter()
-                            .flat_map(|body| body.records)
-                        {
-                            if let Some(token) = record.renewal_token_raw {
-                                renewal_scheduler.record_response(
-                                    record.market,
-                                    &record.code,
-                                    token,
-                                    session_started_at.elapsed().as_millis() as u64,
-                                );
-                            }
-                            if sender
-                                .send(NativePushReaderMessage::Record { shard, record })
-                                .is_err()
+                        for (shard, request_items) in &request_shards {
+                            let initial = session.request_live_quotes(request_items)?;
+                            let _ = sender.send(NativePushReaderMessage::Healthy { shard: *shard });
+                            for record in initial
+                                .quote_bodies
+                                .into_iter()
+                                .flat_map(|body| body.records)
                             {
-                                return Ok(());
+                                if let Some(token) = record.renewal_token_raw {
+                                    renewal_scheduler.record_response(
+                                        record.market,
+                                        &record.code,
+                                        token,
+                                        session_started_at.elapsed().as_millis() as u64,
+                                    );
+                                }
+                                if sender
+                                    .send(NativePushReaderMessage::Record {
+                                        shard: *shard,
+                                        record,
+                                    })
+                                    .is_err()
+                                {
+                                    return Ok(());
+                                }
                             }
                         }
                         while Instant::now() < deadline {
@@ -6815,6 +8306,10 @@ fn execute_hqw_push_worklist(
                                 .into_iter()
                                 .flat_map(|timed| timed.delivery.body.records)
                             {
+                                let shard = shard_by_quote_key
+                                    .get(&(record.market, record.code.clone()))
+                                    .copied()
+                                    .unwrap_or(fallback_shard);
                                 if let Some(token) = record.renewal_token_raw {
                                     renewal_scheduler.record_response(
                                         record.market,
@@ -6857,16 +8352,31 @@ fn execute_hqw_push_worklist(
                     })();
                     if let Err(error) = result {
                         consecutive_failures = consecutive_failures.saturating_add(1);
-                        let retry_delay = native_push_shard_retry_delay(shard, consecutive_failures)
+                        let failed_endpoint = native_push_endpoint_label(config);
+                        endpoint_index = (endpoint_index + 1) % endpoint_pool.len();
+                        let next_endpoint = native_push_endpoint_label(&endpoint_pool[endpoint_index]);
+                        if failed_endpoint != next_endpoint {
+                            let _ = sender.send(NativePushReaderMessage::Failover {
+                                worker,
+                                from: failed_endpoint.clone(),
+                                to: next_endpoint.clone(),
+                            });
+                        }
+                        let retry_delay = native_push_shard_retry_delay(worker, consecutive_failures)
                             .min(deadline.saturating_duration_since(Instant::now()));
-                        let _ = sender.send(NativePushReaderMessage::Failed {
-                            shard,
-                            error: format!(
-                                "{error}; symbols={}; consecutive_failures={consecutive_failures}; retry_ms={}",
-                                request_items.len(),
-                                retry_delay.as_millis()
-                            ),
-                        });
+                        let symbol_count = request_shards
+                            .iter()
+                            .map(|(_, items)| items.len())
+                            .sum::<usize>();
+                        for (shard, _) in &request_shards {
+                            let _ = sender.send(NativePushReaderMessage::Failed {
+                                shard: *shard,
+                                error: format!(
+                                    "{error}; endpoint={failed_endpoint}; next_endpoint={next_endpoint}; worker={worker}; worker_symbols={symbol_count}; consecutive_failures={consecutive_failures}; retry_ms={}",
+                                    retry_delay.as_millis()
+                                ),
+                            });
+                        }
                         std::thread::sleep(retry_delay);
                     }
                 }
@@ -6887,6 +8397,7 @@ fn execute_hqw_push_worklist(
         let mut reader_failures = 0usize;
         let mut reader_recoveries = 0usize;
         let mut renewal_requests = 0usize;
+        let mut endpoint_failovers = 0usize;
         let mut failed_shards = BTreeSet::new();
         let mut audit_runs = 0usize;
         let mut audit_failures = 0usize;
@@ -6928,6 +8439,12 @@ fn execute_hqw_push_worklist(
                     eprintln!("native push shard {shard} failed: {error}");
                     failed_shards.insert(shard);
                     reader_failures = reader_failures.saturating_add(1);
+                }
+                Ok(NativePushReaderMessage::Failover { worker, from, to }) => {
+                    endpoint_failovers = endpoint_failovers.saturating_add(1);
+                    eprintln!(
+                        "native push worker {worker} failing over endpoint from={from} to={to}"
+                    );
                 }
                 Ok(NativePushReaderMessage::RenewalSent) => {
                     renewal_requests = renewal_requests.saturating_add(1);
@@ -7015,6 +8532,9 @@ fn execute_hqw_push_worklist(
             worklist_count: worklist.symbols.len(),
             subscribed_count: primary_symbols.len(),
             shard_count,
+            worker_count,
+            endpoint_pool_size: endpoint_pool.len(),
+            endpoint_failovers,
             received_records,
             converted_records,
             unconverted_symbols: unconverted_symbols.len(),
@@ -7053,7 +8573,11 @@ fn execute_hqw_publish_worklist(
     let mut gateway_protocol = GatewayPublishProtocol::Auto;
     let session_cache = full_push_session_cache();
     let (primary_symbols, mut fallback_symbols) = split_full_push_upstreams(&worklist.symbols);
-    let primary_config = Tdx7709Config::default();
+    let endpoint_pool = native_push_endpoint_pool()?;
+    let primary_config = endpoint_pool
+        .first()
+        .cloned()
+        .expect("explicit endpoint pool is non-empty");
     let primary = publish_full_push_stage(
         "primary",
         &primary_config,
@@ -7074,12 +8598,11 @@ fn execute_hqw_publish_worklist(
     let mut seen = BTreeSet::new();
     fallback_symbols.retain(|symbol| seen.insert(symbol.clone()));
 
-    let fallback_host =
-        std::env::var("NETZIP_TDX7709_FALLBACK_HOST").unwrap_or_else(|_| "139.9.43.31".to_string());
-    let fallback_config = Tdx7709Config {
-        host: fallback_host.clone(),
-        ..Tdx7709Config::default()
-    };
+    let fallback_config = endpoint_pool
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| primary_config.clone());
+    let fallback_host = native_push_endpoint_label(&fallback_config);
     let fallback = publish_full_push_stage(
         "fallback",
         &fallback_config,
@@ -7687,7 +9210,7 @@ fn quote_gateway_http_error(protocol: &str, response: &GatewayHttpResponse) -> A
 fn resolve_kline_category(category: Option<u16>, kline_type: Option<&str>) -> Result<u16, String> {
     if let Some(category) = category {
         return match category {
-            0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 => Ok(category),
+            0..=11 => Ok(category),
             _ => Err(format!("unsupported kline category {category}")),
         };
     }
@@ -7708,6 +9231,498 @@ fn resolve_kline_category(category: Option<u16>, kline_type: Option<&str>) -> Re
         "1y" | "year" | "yearly" => Ok(11),
         _ => Err(format!("unsupported kline_type {normalized}")),
     }
+}
+
+fn oem_kline_type(period: SupplementPeriod) -> &'static str {
+    match period {
+        SupplementPeriod::Daily => "日线",
+        SupplementPeriod::FiveMinute => "5分钟线",
+        SupplementPeriod::OneMinute => "1分钟线",
+    }
+}
+
+#[derive(Clone, Copy)]
+struct OemCodeTableMarket {
+    prefix: &'static str,
+    native_market: u8,
+    oem_market: u8,
+    market_id: u16,
+    market_name: &'static str,
+    table_name: &'static str,
+}
+
+fn oem_code_table_market(value: &str) -> Result<OemCodeTableMarket, ApiError> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "SH" => Ok(OemCodeTableMarket {
+            prefix: "SH",
+            native_market: 1,
+            oem_market: 0,
+            market_id: u16::from_le_bytes(*b"SH"),
+            market_name: "上海证券交易所",
+            table_name: "上海证券代码表",
+        }),
+        "SZ" => Ok(OemCodeTableMarket {
+            prefix: "SZ",
+            native_market: 0,
+            oem_market: 1,
+            market_id: u16::from_le_bytes(*b"SZ"),
+            market_name: "深圳证券交易所",
+            table_name: "深圳证券代码表",
+        }),
+        _ => Err(ApiError::bad_request("market must be SH or SZ")),
+    }
+}
+
+fn oem_code_table_block(market: OemCodeTableMarket, code: &str) -> Result<u8, ApiError> {
+    let block = match market.prefix {
+        "SH" if code.starts_with("00") => 0,
+        "SH" if code.starts_with("11") => 5,
+        "SH" if matches!(code, "519976" | "519977") => 8,
+        "SH" if code.starts_with("51") || code.starts_with("56") || code.starts_with("58") => 7,
+        "SH" if code.starts_with("60") => 1,
+        "SH" if code.starts_with("68") => 9,
+        "SH" if code.starts_with("88") => 10,
+        "SH" if code.starts_with("90") => 2,
+        "SZ" if code.starts_with("00") => 16,
+        "SZ" if code.starts_with("12") => 20,
+        "SZ" if code.starts_with("15") => 22,
+        "SZ" if code.starts_with("20") => 17,
+        "SZ" if code.starts_with("30") => 26,
+        "SZ" if code.starts_with("39") => 15,
+        _ => {
+            return Err(ApiError::internal(format!(
+                "captured Wine block mapping has no rule for {}{code}",
+                market.prefix
+            )));
+        }
+    };
+    Ok(block)
+}
+
+fn oem_pinyin_initials(name: &str) -> String {
+    let mut initials = String::new();
+    for ch in name.chars() {
+        if let Some(pinyin) = ch.to_pinyin() {
+            let initial = pinyin.first_letter();
+            if !initial.is_empty() {
+                initials.push_str(&initial.to_ascii_uppercase());
+                continue;
+            }
+        }
+        let normalized = if ('\u{ff01}'..='\u{ff5e}').contains(&ch) {
+            char::from_u32(ch as u32 - 0xfee0).unwrap_or(ch)
+        } else {
+            ch
+        };
+        if normalized.is_ascii() && !normalized.is_ascii_whitespace() {
+            initials.extend(normalized.to_uppercase());
+        }
+    }
+    initials
+}
+
+fn oem_stock_pinyin(symbol: &str, name: &str) -> String {
+    const CAPTURED_OVERRIDES: &str = include_str!("oem_pinyin_overrides.tsv");
+    for line in CAPTURED_OVERRIDES.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.splitn(3, '\t');
+        let (Some(captured_symbol), Some(captured_name), Some(pinyin)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        if captured_symbol == symbol && captured_name == name {
+            return pinyin.to_string();
+        }
+    }
+    oem_pinyin_initials(name)
+}
+
+fn rounded_oem_limit(value: f32, multiplier: f64, decimal_point: u8) -> f32 {
+    let scale = 10_f64.powi(i32::from(decimal_point));
+    ((f64::from(value) * multiplier * scale).round() / scale) as f32
+}
+
+fn encode_oem_code_table_report(
+    report: &SupplementCodeTableReport,
+    market: &str,
+    date: u32,
+    ask_id: u32,
+) -> Result<Vec<u8>, ApiError> {
+    let market = oem_code_table_market(market)?;
+    let open_time = [570, 780, 0, 0, 0, 0, 0, 0];
+    let close_time = [690, 900, 0, 0, 0, 0, 0, 0];
+    let mut stocks = Vec::new();
+    for record in report
+        .records
+        .iter()
+        .filter(|record| record.market == market.native_market)
+    {
+        let block = oem_code_table_block(market, &record.code)?;
+        let is_index = u8::from(
+            (market.prefix == "SH" && block == 0) || (market.prefix == "SZ" && block == 15),
+        );
+        let is_da_pan = u8::from(matches!(record.symbol.as_str(), "SH000001" | "SZ399001"));
+        let (upper_multiplier, lower_multiplier) = match (market.prefix, block) {
+            ("SH", 9) => (1.20, 0.80),
+            ("SZ", 26) => (1.20, 0.90),
+            _ => (1.10, 0.90),
+        };
+        stocks.push(StockInfoSnapshot {
+            instrument: InstrumentId::parse(&record.symbol).map_err(|error| {
+                ApiError::internal(format!("OEM instrument conversion failed: {error}"))
+            })?,
+            name: record.name.clone(),
+            pinyin: oem_stock_pinyin(&record.symbol, &record.name),
+            code_index: 0,
+            market: market.oem_market,
+            block,
+            point_num: i8::try_from(record.decimal_point).map_err(|_| {
+                ApiError::internal(format!(
+                    "OEM decimal point overflows i8 for {}: {}",
+                    record.symbol, record.decimal_point
+                ))
+            })?,
+            hand: record.volume_unit,
+            last: record.pre_close,
+            limit_up: rounded_oem_limit(record.pre_close, upper_multiplier, record.decimal_point),
+            limit_down: rounded_oem_limit(record.pre_close, lower_multiplier, record.decimal_point),
+            is_index,
+            is_da_pan,
+            is_stock: 1,
+            bs_num: 5,
+            tm_count: 2,
+            open_time,
+            close_time,
+        });
+    }
+    if stocks.is_empty() {
+        return Err(ApiError::internal(format!(
+            "Wine worklist and 7709 code table have no matched {} records",
+            market.prefix
+        )));
+    }
+    encode_code_table_packet(
+        market.table_name,
+        &[MarketInfoSnapshot {
+            market_id: market.market_id,
+            name: market.market_name.to_string(),
+            tm_count: 2,
+            open_time,
+            close_time,
+            date,
+            stocks,
+        }],
+        ask_id,
+    )
+    .map_err(|error| ApiError::internal(format!("OEM code-table encoding failed: {error}")))
+}
+
+fn encode_oem_split_report(report: &WineSplitReport, ask_id: u32) -> Result<Vec<u8>, ApiError> {
+    let groups = report
+        .groups
+        .iter()
+        .map(|group| {
+            let instrument = InstrumentId::parse(&group.symbol).map_err(|error| {
+                ApiError::internal(format!("OEM instrument conversion failed: {error}"))
+            })?;
+            let splits = group
+                .events
+                .iter()
+                .map(|event| SplitSnapshot {
+                    timestamp: event.time,
+                    give: event.give,
+                    allocate: event.allocate,
+                    price: event.price,
+                    earnings: event.earnings,
+                })
+                .collect();
+            Ok(SplitGroupSnapshot {
+                instrument,
+                name: group.name.clone(),
+                splits,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    encode_split_packet(&groups, ask_id)
+        .map_err(|error| ApiError::internal(format!("OEM split encoding failed: {error}")))
+}
+
+fn encode_oem_finance_report(report: &WineFinanceReport, ask_id: u32) -> Result<Vec<u8>, ApiError> {
+    let records = report
+        .records
+        .iter()
+        .map(|record| {
+            let instrument = InstrumentId::parse(&record.symbol).map_err(|error| {
+                ApiError::internal(format!("OEM instrument conversion failed: {error}"))
+            })?;
+            let metrics: [f32; 48] =
+                record
+                    .metrics
+                    .clone()
+                    .try_into()
+                    .map_err(|metrics: Vec<f32>| {
+                        ApiError::internal(format!(
+                            "OEM finance record {} has {} metrics, expected 48",
+                            record.symbol,
+                            metrics.len()
+                        ))
+                    })?;
+            Ok(FinanceSnapshot {
+                instrument,
+                name: record.name.clone(),
+                time: i32::try_from(record.time).map_err(|_| {
+                    ApiError::internal(format!("OEM finance time overflows i32: {}", record.time))
+                })?,
+                bao_gao: i32::try_from(record.bao_gao).map_err(|_| {
+                    ApiError::internal(format!(
+                        "OEM finance bao_gao overflows i32: {}",
+                        record.bao_gao
+                    ))
+                })?,
+                shang_shi: i32::try_from(record.shang_shi).map_err(|_| {
+                    ApiError::internal(format!(
+                        "OEM finance shang_shi overflows i32: {}",
+                        record.shang_shi
+                    ))
+                })?,
+                metrics,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    encode_finance_packet(&records, ask_id)
+        .map_err(|error| ApiError::internal(format!("OEM finance encoding failed: {error}")))
+}
+
+fn encode_oem_realtime_report(
+    realtime: &WineRealtimeDatReport,
+    finance: &WineFinanceReport,
+    ask_id: u32,
+) -> Result<Vec<u8>, ApiError> {
+    let finance_by_symbol = finance
+        .records
+        .iter()
+        .map(|record| (record.symbol.as_str(), record))
+        .collect::<BTreeMap<_, _>>();
+    let mut snapshots = Vec::with_capacity(realtime.records.len());
+
+    for record in &realtime.records {
+        if record.time == 0 {
+            continue;
+        }
+        if !record.price_scale.is_finite() || record.price_scale == 0.0 {
+            return Err(ApiError::internal(format!(
+                "Wine realtime record {} has invalid price scale {}",
+                record.symbol, record.price_scale
+            )));
+        }
+        let scaled_price = |raw: u32| raw as i32 as f32 / record.price_scale;
+        let mut price_sell = [0.0; 10];
+        let mut vol_sell = [0.0; 10];
+        let mut v_sell_cha = [0.0; 10];
+        let mut price_buy = [0.0; 10];
+        let mut vol_buy = [0.0; 10];
+        let mut v_buy_cha = [0.0; 10];
+        for index in 0..5 {
+            price_sell[index] = scaled_price(record.price_sell_raw[index]);
+            vol_sell[index] = record.volume_sell_raw[index] as i32 as f32;
+            v_sell_cha[index] = record.sell_volume_change[index];
+            price_buy[index] = scaled_price(record.price_buy_raw[index]);
+            vol_buy[index] = record.volume_buy_raw[index] as i32 as f32;
+            v_buy_cha[index] = record.buy_volume_change[index];
+        }
+
+        let mut open = scaled_price(record.open_raw);
+        let mut high = scaled_price(record.high_raw);
+        let mut low = scaled_price(record.low_raw);
+        let mut close = scaled_price(record.close_raw);
+        let mut volume = record.volume_raw as f32;
+        if record.quote_state_raw == 0
+            && record.now_volume_raw == 0
+            && record.foot > 1
+            && record.is_buy != 0
+            && volume != 0.0
+        {
+            volume += 1.0;
+        }
+        if record.jing_jia {
+            open = 0.0;
+            high = 0.0;
+            low = 0.0;
+            close = 0.0;
+            volume = 0.0;
+        }
+
+        let mut temp = [0; 74];
+        temp[..4].copy_from_slice(&i32::from(record.temp_marker).to_le_bytes());
+        let last_raw = if record.last_override_raw != 0 {
+            record.last_override_raw
+        } else {
+            record.last_raw
+        };
+        let limit_up_raw = if record.limit_up_override_raw != 0 {
+            record.limit_up_override_raw
+        } else {
+            record.limit_up_raw
+        };
+        let limit_down_raw = if record.limit_down_override_raw != 0 {
+            record.limit_down_override_raw
+        } else {
+            record.limit_down_raw
+        };
+
+        snapshots.push(RealtimeSnapshot {
+            instrument: InstrumentId::parse(&record.symbol).map_err(|error| {
+                ApiError::internal(format!("OEM instrument conversion failed: {error}"))
+            })?,
+            name: record.name.clone(),
+            time: record.time,
+            foot: i32::from(record.foot),
+            open_date: record.open_date,
+            open_time: record.open_time,
+            close_date: record.close_date,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            amount: decode_wine_realtime_amount(record),
+            in_vol: record.in_volume_raw as f32,
+            price_sell,
+            vol_sell,
+            v_sell_cha,
+            price_buy,
+            vol_buy,
+            v_buy_cha,
+            jing_jia: u8::from(record.jing_jia),
+            av_price: scaled_price(record.average_price_raw),
+            is_buy: record.is_buy,
+            now_v: record.now_volume_raw as i32 as f32,
+            now_a: record.now_amount,
+            change: decode_wine_realtime_change(
+                record,
+                finance_by_symbol.get(record.symbol.as_str()).copied(),
+            ),
+            wei_bi: decode_wine_realtime_wei_bi(record),
+            liang_bi: decode_wine_realtime_liang_bi(record),
+            position: 0.0,
+            last: scaled_price(last_raw),
+            limit_up: scaled_price(limit_up_raw),
+            limit_down: scaled_price(limit_down_raw),
+            is_index: record.is_index,
+            is_da_pan: record.is_da_pan,
+            is_stock: record.is_stock,
+            bs_num: record.bs_num,
+            tick_num: record.tick_num,
+            temp,
+        });
+    }
+
+    encode_realtime_snapshots(&snapshots, ask_id)
+        .map_err(|error| ApiError::internal(format!("OEM realtime encoding failed: {error}")))
+}
+
+fn encode_oem_file_payload(label: &str, payload: &[u8], ask_id: u32) -> Result<Vec<u8>, ApiError> {
+    validate_wine_fin_v6_file(payload)
+        .map_err(|error| ApiError::bad_request(format!("validate Wine FIN V6 failed: {error}")))?;
+    encode_file_packet(label, payload, ask_id)
+        .map_err(|error| ApiError::internal(format!("OEM file encoding failed: {error}")))
+}
+
+fn wine_market_date(datetime: &str) -> Result<u32, ApiError> {
+    parse_china_datetime(datetime)?;
+    let year = datetime[0..4]
+        .parse::<u32>()
+        .map_err(|_| ApiError::internal(format!("invalid K-line date: {datetime}")))?;
+    let month = datetime[5..7]
+        .parse::<u32>()
+        .map_err(|_| ApiError::internal(format!("invalid K-line date: {datetime}")))?;
+    let day = datetime[8..10]
+        .parse::<u32>()
+        .map_err(|_| ApiError::internal(format!("invalid K-line date: {datetime}")))?;
+    Ok(year * 10_000 + month * 100 + day)
+}
+
+fn checked_oem_f32(value: f64, field: &str) -> Result<f32, ApiError> {
+    let converted = value as f32;
+    if converted.is_finite() {
+        Ok(converted)
+    } else {
+        Err(ApiError::internal(format!(
+            "OEM K-line field {field} is outside the f32 range: {value}"
+        )))
+    }
+}
+
+fn wine_kline_timestamp(period: SupplementPeriod, datetime: &str) -> Result<u32, ApiError> {
+    let timestamp = parse_china_datetime(datetime)?;
+    if period != SupplementPeriod::Daily {
+        return Ok(timestamp);
+    }
+    parse_china_datetime(&format!("{} 00:00:00", &datetime[..10]))
+}
+
+fn wine_kline_volume(volume: f64, volume_unit: Option<u16>) -> Result<f32, ApiError> {
+    let volume_unit = volume_unit
+        .filter(|unit| *unit > 0)
+        .ok_or_else(|| ApiError::internal("code table has no positive volume_unit"))?;
+    checked_oem_f32((volume / f64::from(volume_unit)).round(), "volume")
+}
+
+fn parse_china_datetime(value: &str) -> Result<u32, ApiError> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 19
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b' '
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+    {
+        return Err(ApiError::internal(format!(
+            "invalid K-line datetime format: {value}"
+        )));
+    }
+    let number = |start: usize, end: usize| -> Result<i64, ApiError> {
+        value[start..end]
+            .parse::<i64>()
+            .map_err(|_| ApiError::internal(format!("invalid K-line datetime: {value}")))
+    };
+    let mut year = number(0, 4)?;
+    let month = number(5, 7)?;
+    let day = number(8, 10)?;
+    let hour = number(11, 13)?;
+    let minute = number(14, 16)?;
+    let second = number(17, 19)?;
+    let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if days_in_month == 0
+        || !(1..=days_in_month).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=59).contains(&second)
+    {
+        return Err(ApiError::internal(format!(
+            "invalid K-line datetime: {value}"
+        )));
+    }
+    year -= i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let adjusted_month = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * adjusted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let unix_days = era * 146_097 + day_of_era - 719_468;
+    let unix_seconds = unix_days * 86_400 + hour * 3_600 + minute * 60 + second - 8 * 3_600;
+    u32::try_from(unix_seconds)
+        .map_err(|_| ApiError::internal(format!("K-line datetime is outside OEM range: {value}")))
 }
 
 fn describe_kline_category(category: u16) -> &'static str {
@@ -7802,6 +9817,7 @@ fn infer_live_quote_market(code: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    use crate::{public_service_endpoints, research_endpoints};
     use std::collections::BTreeMap;
     use std::fs;
     use std::io::{Read, Write};
@@ -7810,26 +9826,52 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        Auth7100PathFilterRequest, CompactQuote, GatewayPublishLane, GatewayPublishProtocol,
+        Auth7100PathFilterRequest, CompactQuote, DEFAULT_WINE_CODE_WORKLIST_PATH,
+        DEFAULT_WINE_FIN_V6_PATH, DEFAULT_WINE_FIN_V8_PATH, DEFAULT_WINE_PWR_V8_PATH,
+        DEFAULT_WINE_REALTIME_PATH, GatewayPublishLane, GatewayPublishProtocol,
         HqwPublishWorklistResponse, Quote0547CodeTableInfo, Quote0547ScopedRecord,
         apply_worklist_names, augment_live_quote_symbols, build_bj_poll_plan,
         build_netzip_rust_7709_quote_batch, build_quote_0547_code_table_lookup,
         cache_full_push_session, collect_quote_0547_input_paths,
-        compact_quotes_response_from_result, filter_auth_7100_flow_matrix,
-        filter_auth_7100_shell_correlation, infer_live_quote_market, infer_name_keyword_tag,
+        compact_quotes_response_from_result, encode_oem_code_table_report, encode_oem_file_payload,
+        encode_oem_finance_report, encode_oem_kline_item, encode_oem_realtime_report,
+        encode_oem_split_report, filter_auth_7100_flow_matrix, filter_auth_7100_shell_correlation,
+        filter_wine_code_worklist_by_realtime, infer_live_quote_market, infer_name_keyword_tag,
         infer_name_keyword_tags, linux_native_endpoints, linux_phase_skipped,
-        native_push_shard_initial_delay, native_push_shard_retry_delay,
-        normalize_live_quote_symbol, parse_compact_quote_codes, parse_gateway_worklist,
-        partition_hqw_quotes, post_quote_gateway_batch_with_tcp, pure_rust_linux_hard_blockers,
-        quote_0547_pattern_subbucket, quote_0547_quote_head_state_label,
-        quote_0547_state_matrix_label, quote_0547_time_presence_label,
-        quote_decimal_point_fallback, quote_frame_scan_summary, recommended_delivery_tracks,
-        record_published_full_push_quotes, retry_full_push_batch, retry_full_push_with_reopen,
-        return_full_push_session, select_new_full_push_quotes, shard_full_push_batches,
-        split_full_push_batches, split_full_push_upstreams, stable_endpoints,
-        take_full_push_session, tdx_0547_public_time_hhmmss, top_scoped_source_groups,
-        try_acquire_full_push, validated_full_push_worker_count,
+        load_wine_realtime_oem_packet, load_wine_realtime_report, native_push_shard_initial_delay,
+        native_push_shard_retry_delay, normalize_live_quote_symbol, official_5188_lane,
+        parse_china_datetime, parse_compact_quote_codes, parse_gateway_worklist,
+        parse_native_push_endpoint_pool, partition_hqw_quotes, post_quote_gateway_batch_with_tcp,
+        pure_rust_linux_hard_blockers, quote_0547_pattern_subbucket,
+        quote_0547_quote_head_state_label, quote_0547_state_matrix_label,
+        quote_0547_time_presence_label, quote_decimal_point_fallback, quote_frame_scan_summary,
+        recommended_delivery_tracks, record_published_full_push_quotes, retry_full_push_batch,
+        retry_full_push_with_reopen, return_full_push_session, select_new_full_push_quotes,
+        shard_full_push_batches, split_full_push_batches, split_full_push_upstreams,
+        stable_endpoints, take_full_push_session, tdx_0547_public_time_hhmmss,
+        top_scoped_source_groups, try_acquire_full_push, validate_auth_flow_service_port,
+        validated_full_push_worker_count, validated_native_push_worker_count, wine_kline_timestamp,
+        wine_kline_volume, wine_market_date,
     };
+
+    fn supplement_code_table_record(
+        symbol: &str,
+        name: &str,
+        market: u8,
+        pre_close: f32,
+    ) -> netzip_supplement::SupplementCodeTableRecord {
+        netzip_supplement::SupplementCodeTableRecord {
+            ordinal: 1,
+            symbol: symbol.to_string(),
+            name: name.to_string(),
+            market,
+            code: symbol[2..].to_string(),
+            volume_unit: 100,
+            decimal_point: 2,
+            pre_close,
+            meta_hex: String::new(),
+        }
+    }
 
     #[test]
     fn full_push_workers_are_bounded_by_batches_and_safety_limit() {
@@ -7838,6 +9880,14 @@ mod tests {
         assert_eq!(validated_full_push_worker_count(4, 0).unwrap(), 0);
         assert!(validated_full_push_worker_count(0, 58).is_err());
         assert!(validated_full_push_worker_count(17, 58).is_err());
+    }
+
+    #[test]
+    fn auth_flow_matrix_rejects_supplement_port_only() {
+        assert!(validate_auth_flow_service_port(6100).is_ok());
+        assert!(validate_auth_flow_service_port(7100).is_ok());
+        assert!(validate_auth_flow_service_port(7719).is_ok());
+        assert!(validate_auth_flow_service_port(7709).is_err());
     }
 
     #[test]
@@ -8106,6 +10156,34 @@ mod tests {
     }
 
     #[test]
+    fn native_push_defaults_can_assign_one_reader_per_market_shard() {
+        assert_eq!(validated_native_push_worker_count(8, 58).unwrap(), 8);
+        assert_eq!(validated_native_push_worker_count(8, 3).unwrap(), 3);
+        assert_eq!(validated_native_push_worker_count(64, 53).unwrap(), 53);
+        assert_eq!(validated_native_push_worker_count(64, 58).unwrap(), 58);
+        assert!(validated_native_push_worker_count(0, 58).is_err());
+        assert!(validated_native_push_worker_count(65, 58).is_err());
+    }
+
+    #[test]
+    fn native_push_requires_explicit_pool_and_accepts_operator_override() {
+        assert!(parse_native_push_endpoint_pool(None).is_err());
+
+        let overridden = parse_native_push_endpoint_pool(Some(
+            "198.51.100.1:7710, 198.51.100.2,198.51.100.1:7710",
+        ))
+        .expect("override endpoints");
+        assert_eq!(overridden.len(), 2);
+        assert_eq!(overridden[0].host, "198.51.100.1");
+        assert_eq!(overridden[0].port, 7710);
+        assert_eq!(overridden[1].host, "198.51.100.2");
+        assert_eq!(overridden[1].port, 7709);
+        assert!(parse_native_push_endpoint_pool(Some("host:not-a-port")).is_err());
+        assert!(parse_native_push_endpoint_pool(Some("official.example:5188")).is_err());
+        assert!(parse_native_push_endpoint_pool(Some("auth.example:7100")).is_err());
+    }
+
+    #[test]
     fn full_push_uses_authoritative_worklist_name_when_upstream_name_is_missing() {
         let mut quotes = vec![CompactQuote {
             code: "920000".to_string(),
@@ -8207,10 +10285,12 @@ mod tests {
         QuoteFrameScanResult, Tdx0547Body, Tdx0547QuoteHead, Tdx0547Record, Tdx7709CodeTableRecord,
         Tdx7709LiveQuoteResult,
     };
+    use netzipapi_rust_demo::{Official5188FrameSinkSnapshot, Official5188ShadowSnapshot};
 
     fn sample_auth_7100_path_filter_request() -> Auth7100PathFilterRequest {
         Auth7100PathFilterRequest {
             path: "/tmp/ignored.pcap".to_string(),
+            service_port: None,
             local_endpoint: Some("192.168.3.38:14717".to_string()),
             session_role: Some("auth_login".to_string()),
             source_endpoint: Some("39.108.103.69:7100".to_string()),
@@ -8335,7 +10415,251 @@ mod tests {
     }
 
     #[test]
+    fn capabilities_mark_only_transition_publisher_as_public_service() {
+        assert_eq!(
+            public_service_endpoints(),
+            vec![
+                "GET /health",
+                "GET /api/capabilities",
+                "POST /api/hqw/push-worklist",
+            ]
+        );
+        assert!(!public_service_endpoints().contains(&"POST /api/supplement/kline"));
+        for endpoint in [
+            "POST /api/fullpull/official-5188/shadow/start",
+            "POST /api/fullpull/official-5188/shadow/stop",
+        ] {
+            assert!(research_endpoints().contains(&endpoint));
+            assert!(!public_service_endpoints().contains(&endpoint));
+            assert!(!stable_endpoints().contains(&endpoint));
+        }
+    }
+
+    #[test]
+    fn official_5188_lane_distinguishes_pending_connected_and_shadow_states() {
+        let retained = Official5188FrameSinkSnapshot {
+            frame_count: 0,
+            byte_count: 0,
+            dropped_frames: 0,
+            wire_kind_counts: BTreeMap::new(),
+            latest_wire_kind: None,
+            latest_payload_len: None,
+            subscriptions: Vec::new(),
+        };
+        let mut shadow = Official5188ShadowSnapshot {
+            running: true,
+            endpoint: "TARGET:5188".to_string(),
+            frames_received: 0,
+            application_bytes_received: 0,
+            delta_2704_frames: 0,
+            bulk_3e04_frames: 0,
+            receive_terminations: 0,
+            decoder_seed_records: 0,
+            decoder_attempted_frames: 0,
+            decoder_decoded_frames: 0,
+            decoder_partial_frames: 0,
+            decoder_failed_frames: 0,
+            decoder_error_kinds: BTreeMap::new(),
+            decoder_baseline_modes: BTreeMap::new(),
+            decoder_error_samples: BTreeMap::new(),
+            decoder_decoded_records: 0,
+            decoder_omitted_tail_records: 0,
+            decoder_oem_state_symbols: 0,
+            decoder_oem_state_updates: 0,
+            decoder_missing_previous_close_seeds: 0,
+            decoder_rejected_public_quotes: 0,
+            decoder_last_error: None,
+            last_error: None,
+            retained,
+        };
+        assert_eq!(
+            official_5188_lane(false, false, None),
+            "pending-production-wiring"
+        );
+        assert_eq!(
+            official_5188_lane(true, false, None),
+            "connected-awaiting-initialization"
+        );
+        assert_eq!(
+            official_5188_lane(false, false, Some(&shadow)),
+            "shadow-observing-uninitialized-socket"
+        );
+        shadow.frames_received = 1;
+        assert_eq!(
+            official_5188_lane(false, false, Some(&shadow)),
+            "shadow-receiving-opaque-frames"
+        );
+        shadow.running = false;
+        assert_eq!(
+            official_5188_lane(false, false, Some(&shadow)),
+            "shadow-stopped"
+        );
+        shadow.running = true;
+        shadow.frames_received = 0;
+        assert_eq!(
+            official_5188_lane(false, true, Some(&shadow)),
+            "initialized-awaiting-server-frames"
+        );
+        shadow.delta_2704_frames = 1;
+        shadow.frames_received = 1;
+        assert_eq!(
+            official_5188_lane(false, true, Some(&shadow)),
+            "initialized-receiving-business-frames"
+        );
+    }
+
+    #[test]
+    fn official_5188_status_serializes_metrics_without_raw_payload_or_credentials() {
+        let response = super::Official5188StatusResponse {
+            authenticated: true,
+            selected_endpoint: Some("TARGET:5188".to_string()),
+            control_session_retained: true,
+            initialized: true,
+            post_initialization_frame_count: Some(4),
+            code_table_count: Some(4),
+            connection_count: 7,
+            receive_list_codes: Some(6955),
+            slots: Vec::new(),
+            lane: "initialized-receiving-opaque-frames",
+            business_decoder: "opaque-evidence-only",
+            shadow: Some(Official5188ShadowSnapshot {
+                running: true,
+                endpoint: "TARGET:5188".to_string(),
+                frames_received: 2,
+                application_bytes_received: 52,
+                delta_2704_frames: 1,
+                bulk_3e04_frames: 1,
+                receive_terminations: 0,
+                decoder_seed_records: 0,
+                decoder_attempted_frames: 1,
+                decoder_decoded_frames: 0,
+                decoder_partial_frames: 0,
+                decoder_failed_frames: 1,
+                decoder_error_kinds: BTreeMap::from([(
+                    "ladder_volumes:bitstream_exhausted".to_string(),
+                    1,
+                )]),
+                decoder_baseline_modes: BTreeMap::from([("relative".to_string(), 1)]),
+                decoder_error_samples: BTreeMap::new(),
+                decoder_decoded_records: 0,
+                decoder_omitted_tail_records: 0,
+                decoder_oem_state_symbols: 0,
+                decoder_oem_state_updates: 0,
+                decoder_missing_previous_close_seeds: 0,
+                decoder_rejected_public_quotes: 0,
+                decoder_last_error: None,
+                last_error: None,
+                retained: Official5188FrameSinkSnapshot {
+                    frame_count: 2,
+                    byte_count: 52,
+                    dropped_frames: 0,
+                    wire_kind_counts: BTreeMap::from([
+                        ("2704".to_string(), 1),
+                        ("3e04".to_string(), 1),
+                    ]),
+                    latest_wire_kind: Some("3e04".to_string()),
+                    latest_payload_len: Some(24),
+                    subscriptions: Vec::new(),
+                },
+            }),
+            shadows: Vec::new(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("application_bytes_received"));
+        assert!(json.contains("decoder_baseline_modes"));
+        assert!(json.contains("decoder_partial_frames"));
+        assert!(json.contains("decoder_omitted_tail_records"));
+        assert!(json.contains("decoder_oem_state_symbols"));
+        assert!(json.contains("decoder_oem_state_updates"));
+        assert!(json.contains("decoder_missing_previous_close_seeds"));
+        assert!(json.contains("decoder_rejected_public_quotes"));
+        for forbidden in [
+            "payload_hex",
+            "raw_payload",
+            "password",
+            "credential",
+            "raw_hex",
+        ] {
+            assert!(!json.contains(forbidden), "status leaked field {forbidden}");
+        }
+    }
+
+    #[test]
+    fn official_5188_shadow_merge_sums_partial_decoder_frames() {
+        fn snapshot(
+            attempted: u64,
+            decoded: u64,
+            partial: u64,
+            failed: u64,
+            records: u64,
+            omitted: u64,
+            missing_seeds: u64,
+            rejected: u64,
+        ) -> Official5188ShadowSnapshot {
+            Official5188ShadowSnapshot {
+                running: true,
+                endpoint: "TARGET:5188".to_string(),
+                frames_received: attempted,
+                application_bytes_received: 0,
+                delta_2704_frames: attempted,
+                bulk_3e04_frames: 0,
+                receive_terminations: 0,
+                decoder_seed_records: 0,
+                decoder_attempted_frames: attempted,
+                decoder_decoded_frames: decoded,
+                decoder_partial_frames: partial,
+                decoder_failed_frames: failed,
+                decoder_error_kinds: BTreeMap::new(),
+                decoder_baseline_modes: BTreeMap::new(),
+                decoder_error_samples: BTreeMap::new(),
+                decoder_decoded_records: records,
+                decoder_omitted_tail_records: omitted,
+                decoder_oem_state_symbols: records as usize,
+                decoder_oem_state_updates: records - missing_seeds - rejected,
+                decoder_missing_previous_close_seeds: missing_seeds,
+                decoder_rejected_public_quotes: rejected,
+                decoder_last_error: None,
+                last_error: None,
+                retained: Official5188FrameSinkSnapshot {
+                    frame_count: 0,
+                    byte_count: 0,
+                    dropped_frames: 0,
+                    wire_kind_counts: BTreeMap::new(),
+                    latest_wire_kind: None,
+                    latest_payload_len: None,
+                    subscriptions: Vec::new(),
+                },
+            }
+        }
+
+        let merged = super::merge_official_5188_shadow_snapshots(&[
+            snapshot(11, 7, 3, 4, 70, 600, 5, 2),
+            snapshot(13, 8, 4, 5, 80, 799, 3, 4),
+        ])
+        .unwrap();
+        assert_eq!(merged.decoder_attempted_frames, 24);
+        assert_eq!(merged.decoder_decoded_frames, 15);
+        assert_eq!(merged.decoder_partial_frames, 7);
+        assert_eq!(merged.decoder_failed_frames, 9);
+        assert_eq!(merged.decoder_decoded_records, 150);
+        assert_eq!(merged.decoder_omitted_tail_records, 1399);
+        assert_eq!(merged.decoder_oem_state_symbols, 150);
+        assert_eq!(merged.decoder_oem_state_updates, 136);
+        assert_eq!(merged.decoder_missing_previous_close_seeds, 8);
+        assert_eq!(merged.decoder_rejected_public_quotes, 6);
+        assert_eq!(
+            merged.decoder_decoded_records,
+            merged.decoder_oem_state_updates
+                + merged.decoder_missing_previous_close_seeds
+                + merged.decoder_rejected_public_quotes,
+            "decoded records must equal OEM updates, not-ready records, and semantic rejects"
+        );
+    }
+
+    #[test]
     fn capabilities_include_linux_first_snapshot_and_mvp_endpoints() {
+        assert!(research_endpoints().contains(&"GET /api/fullpull/official-5188/shadow/quotes"));
+        assert!(!stable_endpoints().contains(&"GET /api/fullpull/official-5188/shadow/quotes"));
         assert!(stable_endpoints().contains(&"GET /api/quotes"));
         assert!(linux_native_endpoints().contains(&"GET /api/quotes"));
         assert!(stable_endpoints().contains(&"POST /api/hqw/publish"));
@@ -8346,8 +10670,611 @@ mod tests {
         assert!(linux_native_endpoints().contains(&"POST /api/hqw/push-worklist"));
         assert!(stable_endpoints().contains(&"POST /api/tdx7709/snapshot"));
         assert!(linux_native_endpoints().contains(&"POST /api/tdx7709/snapshot"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/kline"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/kline"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/kline/oem"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/kline/oem"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/code-table"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/code-table"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/code-table/oem"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/code-table/oem"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/split/oem"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/split/oem"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/finance/oem"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/finance/oem"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/file/oem"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/file/oem"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/realtime"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/realtime"));
+        assert!(stable_endpoints().contains(&"POST /api/supplement/realtime/oem"));
+        assert!(linux_native_endpoints().contains(&"POST /api/supplement/realtime/oem"));
+        assert!(linux_native_endpoints().contains(&"POST /api/debug/pcap-5188-summary"));
+        assert!(research_endpoints().contains(&"POST /api/debug/pcap-5188-summary"));
         assert!(stable_endpoints().contains(&"POST /api/linux/pure-rust-mvp"));
         assert!(linux_native_endpoints().contains(&"POST /api/linux/pure-rust-mvp"));
+    }
+
+    #[test]
+    fn service_loads_wine_realtime_dat_supplement_report() {
+        let report =
+            load_wine_realtime_report("/home/codes/third_party/quoteNetzipWine/数据/实时.dat")
+                .unwrap();
+        assert!(report.declared_records > 5_000);
+        assert_eq!(report.records.len(), report.declared_records);
+        let sh600000 = report
+            .records
+            .iter()
+            .find(|record| record.symbol == "SH600000")
+            .unwrap();
+        assert_eq!(sh600000.name, "浦发银行");
+        assert!(sh600000.price_scale > 0.0);
+    }
+
+    #[test]
+    fn oem_realtime_packet_maps_shared_wine_and_finance_reports() {
+        let worklist = std::fs::read(DEFAULT_WINE_CODE_WORKLIST_PATH).unwrap();
+        let entries = netzip_supplement::parse_wine_code_worklist(&worklist).unwrap();
+        let fin = std::fs::read(DEFAULT_WINE_FIN_V8_PATH).unwrap();
+        let finance = netzip_supplement::parse_wine_fin_v8(&fin, &entries).unwrap();
+        let realtime = load_wine_realtime_report(DEFAULT_WINE_REALTIME_PATH).unwrap();
+
+        let packet = encode_oem_realtime_report(&realtime, &finance, 43).unwrap();
+        let count = realtime
+            .records
+            .iter()
+            .filter(|record| record.time != 0)
+            .count();
+        assert_eq!(packet.len(), 200 + count * 500);
+        assert_eq!(
+            i32::from_le_bytes(packet[20..24].try_into().unwrap()),
+            i32::try_from(count * 500).unwrap()
+        );
+        assert_eq!(
+            i32::from_le_bytes(packet[24..28].try_into().unwrap()),
+            i32::try_from(count).unwrap()
+        );
+        assert_eq!(u32::from_le_bytes(packet[191..195].try_into().unwrap()), 43);
+
+        let record_index = realtime
+            .records
+            .iter()
+            .filter(|record| record.time != 0)
+            .position(|record| record.symbol == "SH600000")
+            .unwrap();
+        let record = realtime
+            .records
+            .iter()
+            .find(|record| record.symbol == "SH600000")
+            .unwrap();
+        let finance_record = finance
+            .records
+            .iter()
+            .find(|item| item.symbol == record.symbol);
+        let offset = 200 + record_index * 500;
+        assert_eq!(
+            u32::from_le_bytes(packet[offset + 88..offset + 92].try_into().unwrap()),
+            record.time
+        );
+        assert_eq!(
+            f32::from_le_bytes(packet[offset + 124..offset + 128].try_into().unwrap()),
+            record.volume_raw as f32
+        );
+        assert_eq!(
+            f32::from_le_bytes(packet[offset + 128..offset + 132].try_into().unwrap()).to_bits(),
+            netzip_supplement::decode_wine_realtime_amount(record).to_bits()
+        );
+        assert_eq!(
+            f32::from_le_bytes(packet[offset + 390..offset + 394].try_into().unwrap()).to_bits(),
+            netzip_supplement::decode_wine_realtime_change(record, finance_record).to_bits()
+        );
+        assert_eq!(
+            f32::from_le_bytes(packet[offset + 394..offset + 398].try_into().unwrap()).to_bits(),
+            netzip_supplement::decode_wine_realtime_wei_bi(record).to_bits()
+        );
+        assert_eq!(
+            f32::from_le_bytes(packet[offset + 398..offset + 402].try_into().unwrap()).to_bits(),
+            netzip_supplement::decode_wine_realtime_liang_bi(record).to_bits()
+        );
+        assert!(
+            packet[offset + 430..offset + 500]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+    }
+
+    #[test]
+    fn service_loads_complete_wine_realtime_oem_packet() {
+        let realtime = load_wine_realtime_report(DEFAULT_WINE_REALTIME_PATH).unwrap();
+        let packet =
+            load_wine_realtime_oem_packet(DEFAULT_WINE_REALTIME_PATH, DEFAULT_WINE_FIN_V8_PATH, 47)
+                .unwrap();
+        let initialized_count = realtime
+            .records
+            .iter()
+            .filter(|record| record.time != 0)
+            .count();
+        assert_eq!(packet.len(), 200 + initialized_count * 500);
+        assert_eq!(
+            i32::from_le_bytes(packet[24..28].try_into().unwrap()),
+            i32::try_from(initialized_count).unwrap()
+        );
+        assert_eq!(u32::from_le_bytes(packet[191..195].try_into().unwrap()), 47);
+        let record_index = realtime
+            .records
+            .iter()
+            .filter(|record| record.time != 0)
+            .position(|record| record.symbol == "SH600000")
+            .unwrap();
+        let record = realtime
+            .records
+            .iter()
+            .find(|record| record.symbol == "SH600000")
+            .unwrap();
+        let offset = 200 + record_index * 500;
+        assert_eq!(
+            f32::from_le_bytes(packet[offset + 128..offset + 132].try_into().unwrap()).to_bits(),
+            netzip_supplement::decode_wine_realtime_amount(record).to_bits()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the current Wine data directory to match the captured initialization fixture"]
+    fn current_wine_split_callback_matches_shared_loader_and_oem_encoder() {
+        let captured = read_current_wine_initialization_fixture("wine_init_split.bin");
+        let worklist = fs::read(DEFAULT_WINE_CODE_WORKLIST_PATH).unwrap();
+        let entries = netzip_supplement::parse_wine_code_worklist(&worklist).unwrap();
+        let realtime = load_wine_realtime_report(DEFAULT_WINE_REALTIME_PATH).unwrap();
+        let entries = filter_wine_code_worklist_by_realtime(&entries, &realtime);
+        let pwr = fs::read(DEFAULT_WINE_PWR_V8_PATH).unwrap();
+        let report = netzip_supplement::parse_wine_pwr_v8(&pwr, &entries).unwrap();
+        let encoded = encode_oem_split_report(&report, 0).unwrap();
+        let mut normalized = captured;
+        normalize_oem_head_utf16_tails(&mut normalized);
+        let mut offset = 200usize;
+        while offset < normalized.len() {
+            zero_utf16_tail(&mut normalized[offset..offset + 24]);
+            zero_utf16_tail(&mut normalized[offset + 24..offset + 88]);
+            let count = usize::from(u16::from_le_bytes(
+                normalized[offset + 88..offset + 90].try_into().unwrap(),
+            ));
+            offset += 200;
+            for _ in 0..count {
+                zero_utf16_tail(&mut normalized[offset + 20..offset + 200]);
+                offset += 200;
+            }
+        }
+        assert_eq!(offset, normalized.len());
+        assert_packet_bytes_eq("split", &encoded, &normalized);
+    }
+
+    #[test]
+    #[ignore = "requires the current Wine data directory to match the captured initialization fixture"]
+    fn current_wine_finance_callback_matches_shared_loader_and_oem_encoder() {
+        let captured = read_current_wine_initialization_fixture("wine_init_finance.bin");
+        let worklist = fs::read(DEFAULT_WINE_CODE_WORKLIST_PATH).unwrap();
+        let entries = netzip_supplement::parse_wine_code_worklist(&worklist).unwrap();
+        let realtime = load_wine_realtime_report(DEFAULT_WINE_REALTIME_PATH).unwrap();
+        let entries = filter_wine_code_worklist_by_realtime(&entries, &realtime);
+        let fin = fs::read(DEFAULT_WINE_FIN_V8_PATH).unwrap();
+        let report = netzip_supplement::parse_wine_fin_v8(&fin, &entries).unwrap();
+        let encoded = encode_oem_finance_report(&report, 0).unwrap();
+        let mut normalized = captured;
+        normalize_oem_head_utf16_tails(&mut normalized);
+        let count = i32::from_le_bytes(normalized[24..28].try_into().unwrap()) as usize;
+        for index in 0..count {
+            let offset = 200 + index * 350;
+            zero_utf16_tail(&mut normalized[offset..offset + 24]);
+            zero_utf16_tail(&mut normalized[offset + 24..offset + 88]);
+            normalized[offset + 292..offset + 350].fill(0);
+        }
+        assert_packet_bytes_eq("finance", &encoded, &normalized);
+    }
+
+    #[test]
+    #[ignore = "requires the current Wine data directory to match the captured initialization fixture"]
+    fn current_wine_file_callback_matches_validated_v6_payload() {
+        let captured = read_current_wine_initialization_fixture("wine_init_file.bin");
+        let payload = fs::read(DEFAULT_WINE_FIN_V6_PATH).unwrap();
+        let encoded = encode_oem_file_payload("数据\\财务V6.fin", &payload, 0).unwrap();
+        let mut normalized = captured;
+        normalize_oem_head_utf16_tails(&mut normalized);
+        assert_packet_bytes_eq("file", &encoded, &normalized);
+    }
+
+    #[test]
+    #[ignore = "requires the current Wine data directory to match the captured initialization fixture"]
+    fn current_wine_realtime_callback_matches_shared_loader_and_oem_encoder() {
+        let captured = read_current_wine_initialization_fixture("wine_init_realtime_01.bin");
+        let encoded =
+            load_wine_realtime_oem_packet(DEFAULT_WINE_REALTIME_PATH, DEFAULT_WINE_FIN_V8_PATH, 0)
+                .unwrap();
+        let mut normalized = captured;
+        normalize_oem_head_utf16_tails(&mut normalized);
+        let count = i32::from_le_bytes(normalized[24..28].try_into().unwrap()) as usize;
+        for index in 0..count {
+            let offset = 200 + index * 500;
+            zero_utf16_tail(&mut normalized[offset..offset + 24]);
+            zero_utf16_tail(&mut normalized[offset + 24..offset + 88]);
+        }
+        assert_packet_bytes_eq("realtime", &encoded, &normalized);
+    }
+
+    #[test]
+    fn current_wine_empty_realtime_callback_matches_oem_encoder() {
+        let captured = read_current_wine_initialization_fixture("wine_init_realtime_02.bin");
+        let encoded = tuwenca_codec::encode_realtime_snapshots(&[], 0).unwrap();
+        let mut normalized = captured;
+        normalize_oem_head_utf16_tails(&mut normalized);
+        assert_packet_bytes_eq("empty realtime", &encoded, &normalized);
+    }
+
+    fn read_current_wine_initialization_fixture(name: &str) -> Vec<u8> {
+        fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("windows_debug/kline_full_probe_20260901/fixtures_init_168_20260901")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    fn normalize_oem_head_utf16_tails(packet: &mut [u8]) {
+        for range in [0..20, 28..52, 52..116] {
+            zero_utf16_tail(&mut packet[range]);
+        }
+    }
+
+    fn zero_utf16_tail(field: &mut [u8]) {
+        if let Some(offset) = field
+            .chunks_exact(2)
+            .position(|unit| unit == [0, 0])
+            .map(|index| index * 2)
+        {
+            field[offset..].fill(0);
+        }
+    }
+
+    fn assert_packet_bytes_eq(label: &str, encoded: &[u8], captured: &[u8]) {
+        if encoded == captured {
+            return;
+        }
+        let offset = encoded
+            .iter()
+            .zip(captured)
+            .position(|(left, right)| left != right)
+            .unwrap_or(encoded.len().min(captured.len()));
+        panic!(
+            "{label} packet differs at offset {offset}: encoded_len={} captured_len={} encoded={:02x?} captured={:02x?}",
+            encoded.len(),
+            captured.len(),
+            &encoded[offset.saturating_sub(8)..(offset + 9).min(encoded.len())],
+            &captured[offset.saturating_sub(8)..(offset + 9).min(captured.len())]
+        );
+    }
+
+    #[test]
+    fn oem_file_packet_preserves_validated_v6_payload() {
+        let mut payload = Vec::with_capacity(174);
+        payload.extend_from_slice(&0x223f_d90c_u32.to_le_bytes());
+        payload.extend_from_slice(&166_u32.to_le_bytes());
+        payload.extend_from_slice(&[0x5a; 166]);
+
+        let packet = encode_oem_file_payload("数据\\财务V6.fin", &payload, 41).unwrap();
+        assert_eq!(packet.len(), 374);
+        assert_eq!(i32::from_le_bytes(packet[20..24].try_into().unwrap()), 174);
+        assert_eq!(i32::from_le_bytes(packet[24..28].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(packet[191..195].try_into().unwrap()), 41);
+        assert_eq!(&packet[200..], payload);
+    }
+
+    #[test]
+    fn oem_split_packet_maps_shared_wine_report() {
+        let report = netzip_supplement::WineSplitReport {
+            source_groups: 1,
+            source_events: 1,
+            nonstandard_groups: 0,
+            matched_groups: 1,
+            matched_events: 1,
+            groups: vec![netzip_supplement::WineSplitGroup {
+                ordinal: 1,
+                symbol: "SH600000".to_string(),
+                name: "浦发银行".to_string(),
+                events: vec![netzip_supplement::WineSplitEvent {
+                    time: 962_812_800,
+                    give: 0.0,
+                    allocate: 0.0,
+                    price: 0.0,
+                    earnings: 0.15,
+                }],
+            }],
+        };
+
+        let packet = encode_oem_split_report(&report, 23).unwrap();
+        assert_eq!(packet.len(), 600);
+        assert_eq!(i32::from_le_bytes(packet[20..24].try_into().unwrap()), 400);
+        assert_eq!(i32::from_le_bytes(packet[24..28].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(packet[191..195].try_into().unwrap()), 23);
+        assert_eq!(u16::from_le_bytes(packet[288..290].try_into().unwrap()), 1);
+        assert_eq!(
+            u32::from_le_bytes(packet[400..404].try_into().unwrap()),
+            962_812_800
+        );
+        assert_eq!(
+            f32::from_le_bytes(packet[416..420].try_into().unwrap()),
+            0.15
+        );
+    }
+
+    #[test]
+    fn oem_finance_packet_maps_shared_wine_report() {
+        let mut metrics = vec![0.0; 48];
+        metrics[0] = 0.89;
+        metrics[1] = 22.63;
+        metrics[11] = 10_405_354_496.0;
+        let report = netzip_supplement::WineFinanceReport {
+            source_records: 1,
+            matched_records: 1,
+            records: vec![netzip_supplement::WineFinanceRecord {
+                ordinal: 1,
+                symbol: "SH600000".to_string(),
+                name: "浦发银行".to_string(),
+                time: 20_260_828,
+                bao_gao: 20_260_601,
+                shang_shi: 19_991_110,
+                metrics,
+            }],
+        };
+
+        let packet = encode_oem_finance_report(&report, 37).unwrap();
+        assert_eq!(packet.len(), 550);
+        assert_eq!(i32::from_le_bytes(packet[20..24].try_into().unwrap()), 350);
+        assert_eq!(i32::from_le_bytes(packet[24..28].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(packet[191..195].try_into().unwrap()), 37);
+        assert_eq!(
+            i32::from_le_bytes(packet[288..292].try_into().unwrap()),
+            20_260_828
+        );
+        assert_eq!(
+            f32::from_le_bytes(packet[300..304].try_into().unwrap()),
+            0.89
+        );
+        assert_eq!(
+            f32::from_le_bytes(packet[344..348].try_into().unwrap()),
+            10_405_354_496.0
+        );
+        assert!(packet[492..550].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn oem_code_table_packet_matches_captured_market_rules() {
+        assert_eq!(super::oem_pinyin_initials("*ST国华"), "*STGH");
+        assert_eq!(super::oem_pinyin_initials("万科Ａ"), "WKA");
+        assert_eq!(super::oem_stock_pinyin("SH600000", "浦发银行"), "PFYH");
+        assert_eq!(super::oem_stock_pinyin("SH999999", "浦发银行"), "PFYX");
+        let report = netzip_supplement::SupplementCodeTableReport {
+            requested_count: 5,
+            matched_count: 5,
+            missing_symbols: Vec::new(),
+            records: vec![
+                supplement_code_table_record("SH600000", "浦发银行", 1, 10.06),
+                supplement_code_table_record("SH688001", "华兴源创", 1, 30.16),
+                supplement_code_table_record("SZ300001", "特锐德", 0, 28.29),
+                supplement_code_table_record("SZ399001", "深证成指", 0, 13_606.44),
+                supplement_code_table_record("SZ000004", "*ST国华", 0, 5.10),
+            ],
+        };
+
+        let sh = encode_oem_code_table_report(&report, "SH", 20_260_327, 17).unwrap();
+        assert_eq!(sh.len(), 200 + 200 + 2 * 250);
+        assert_eq!(i32::from_le_bytes(sh[20..24].try_into().unwrap()), 700);
+        assert_eq!(i32::from_le_bytes(sh[24..28].try_into().unwrap()), 2);
+        assert_eq!(
+            u32::from_le_bytes(sh[300..304].try_into().unwrap()),
+            20_260_327
+        );
+        assert_eq!(u16::from_le_bytes(sh[304..306].try_into().unwrap()), 2);
+        assert_eq!(sh[555], 1); // SH600000 block
+        assert_eq!(sh[805], 9); // SH688001 STAR block
+        assert_eq!(f32::from_le_bytes(sh[563..567].try_into().unwrap()), 11.07);
+        assert_eq!(f32::from_le_bytes(sh[567..571].try_into().unwrap()), 9.05);
+        assert_eq!(f32::from_le_bytes(sh[813..817].try_into().unwrap()), 36.19);
+        assert_eq!(f32::from_le_bytes(sh[817..821].try_into().unwrap()), 24.13);
+
+        let sz = encode_oem_code_table_report(&report, "SZ", 20_260_327, 18).unwrap();
+        assert_eq!(sz.len(), 200 + 200 + 3 * 250);
+        assert_eq!(sz[555], 26); // SZ300001 ChiNext block
+        assert_eq!(sz[805], 15); // SZ399001 index block
+        assert_eq!(sz[821], 1); // is_index
+        assert_eq!(sz[822], 1); // is_da_pan
+        assert_eq!(f32::from_le_bytes(sz[563..567].try_into().unwrap()), 33.95);
+        assert_eq!(f32::from_le_bytes(sz[567..571].try_into().unwrap()), 25.46);
+        assert_eq!(
+            &sz[988..998],
+            &[b'*', 0, b'S', 0, b'T', 0, b'G', 0, b'H', 0]
+        );
+    }
+
+    #[test]
+    fn oem_pinyin_matches_all_captured_sh_and_sz_records() {
+        let captures = [
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/windows_debug/tmp_netzip_probe_20260329/",
+                "frida_ws2_trace_20260330_v13_code_table_full_chunks/",
+                "record_array_split/records.csv"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/windows_debug/tmp_netzip_probe_20260329/",
+                "frida_ws2_trace_20260330_v14_object2_sz_code_table/",
+                "record_array_split/records.csv"
+            )),
+        ];
+        let mut checked = 0usize;
+        let mut mismatches = Vec::new();
+        for capture in captures {
+            for line in capture.lines().skip(1) {
+                let fields = line.split(',').collect::<Vec<_>>();
+                let (Some(symbol), Some(name), Some(expected)) =
+                    (fields.get(4), fields.get(5), fields.get(6))
+                else {
+                    continue;
+                };
+                checked += 1;
+                let actual = super::oem_stock_pinyin(symbol, name);
+                if actual != *expected {
+                    mismatches.push(format!("{symbol}\t{name}\t{expected}\t{actual}"));
+                }
+            }
+        }
+        assert_eq!(checked, 2_965 + 3_366);
+        assert!(
+            mismatches.is_empty(),
+            "Wine pinyin mismatches ({}):\n{}",
+            mismatches.len(),
+            mismatches.join("\n")
+        );
+    }
+
+    #[test]
+    fn oem_code_table_date_comes_from_latest_daily_bar() {
+        assert_eq!(wine_market_date("2026-03-27 15:00:00").unwrap(), 20_260_327);
+        assert!(wine_market_date("2026/03/27").is_err());
+    }
+
+    #[test]
+    fn china_datetime_matches_wine_kline_timestamps() {
+        assert_eq!(
+            parse_china_datetime("2026-03-27 14:58:00").unwrap(),
+            1_774_594_680
+        );
+        assert_eq!(
+            parse_china_datetime("2026-03-25 00:00:00").unwrap(),
+            1_774_368_000
+        );
+        assert!(parse_china_datetime("2026-02-30 00:00:00").is_err());
+        assert!(parse_china_datetime("2026/03/27 14:58:00").is_err());
+    }
+
+    #[test]
+    fn wine_kline_mapping_normalizes_daily_time_and_volume_unit() {
+        assert_eq!(
+            wine_kline_timestamp(
+                netzip_supplement::SupplementPeriod::Daily,
+                "2026-08-27 15:00:00",
+            )
+            .unwrap(),
+            1_787_760_000
+        );
+        assert_eq!(
+            wine_kline_timestamp(
+                netzip_supplement::SupplementPeriod::FiveMinute,
+                "2026-08-31 14:50:00",
+            )
+            .unwrap(),
+            1_788_159_000
+        );
+        assert_eq!(
+            wine_kline_volume(95_810_088.0, Some(100))
+                .unwrap()
+                .to_bits(),
+            958_101.0_f32.to_bits()
+        );
+        assert!(wine_kline_volume(1.0, Some(0)).is_err());
+        assert!(wine_kline_volume(1.0, None).is_err());
+    }
+
+    #[test]
+    fn service_kline_mapping_matches_complete_wine_answers() {
+        let fixtures = [
+            (
+                netzip_supplement::SupplementPeriod::Daily,
+                4,
+                [
+                    "2026-08-27 15:00:00",
+                    "2026-08-28 15:00:00",
+                    "2026-08-31 15:00:00",
+                ],
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/windows_debug/kline_full_probe_20260901/fixtures/",
+                    "wine_daily_SH600000_3.bin"
+                ))
+                .as_slice(),
+            ),
+            (
+                netzip_supplement::SupplementPeriod::FiveMinute,
+                5,
+                [
+                    "2026-08-31 14:50:00",
+                    "2026-08-31 14:55:00",
+                    "2026-08-31 15:00:00",
+                ],
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/windows_debug/kline_full_probe_20260901/fixtures/",
+                    "wine_five_minute_SH600000_3.bin"
+                ))
+                .as_slice(),
+            ),
+            (
+                netzip_supplement::SupplementPeriod::OneMinute,
+                6,
+                [
+                    "2026-08-31 14:58:00",
+                    "2026-08-31 14:59:00",
+                    "2026-08-31 15:00:00",
+                ],
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/windows_debug/kline_full_probe_20260901/fixtures/",
+                    "wine_one_minute_SH600000_3.bin"
+                ))
+                .as_slice(),
+            ),
+        ];
+
+        for (period, ask_id, datetimes, captured) in fixtures {
+            let bars = captured[200..]
+                .chunks_exact(32)
+                .zip(datetimes)
+                .map(|(record, datetime)| netzip_supplement::SupplementBar {
+                    symbol: "SH600000".to_string(),
+                    market: 1,
+                    code: "600000".to_string(),
+                    period,
+                    category: period.category(),
+                    datetime: datetime.to_string(),
+                    open: f64::from(f32::from_le_bytes(record[4..8].try_into().unwrap())),
+                    high: f64::from(f32::from_le_bytes(record[8..12].try_into().unwrap())),
+                    low: f64::from(f32::from_le_bytes(record[12..16].try_into().unwrap())),
+                    close: f64::from(f32::from_le_bytes(record[16..20].try_into().unwrap())),
+                    volume: f64::from(f32::from_le_bytes(record[20..24].try_into().unwrap()))
+                        * 100.0,
+                    amount: f64::from(f32::from_le_bytes(record[24..28].try_into().unwrap())),
+                })
+                .collect::<Vec<_>>();
+            let item = netzip_supplement::SupplementItemResult {
+                symbol: "SH600000".to_string(),
+                name: Some("浦发银行".to_string()),
+                volume_unit: Some(100),
+                period,
+                category: period.category(),
+                requested_count: 3,
+                fetched_count: 3,
+                page_count: 1,
+                exhausted: false,
+                complete: true,
+                error: None,
+                bars,
+            };
+
+            assert_eq!(
+                encode_oem_kline_item(item, None, ask_id, 0).unwrap(),
+                captured,
+                "{} service mapping differs from Wine",
+                period.wire_name()
+            );
+        }
     }
 
     #[test]
@@ -8386,6 +11313,7 @@ mod tests {
                 market: 1,
                 code: "600000".to_string(),
                 name: "浦发银行".to_string(),
+                volume_unit: 100,
                 meta,
             }],
             quote_reply: Vec::new(),
@@ -8469,6 +11397,7 @@ mod tests {
                 market: 1,
                 code: "510300".to_string(),
                 name: "300ETF".to_string(),
+                volume_unit: 100,
                 meta,
             }],
             quote_reply: Vec::new(),
@@ -8568,6 +11497,7 @@ mod tests {
                 market,
                 code: code.to_string(),
                 name: "observed".to_string(),
+                volume_unit: 100,
                 meta,
             }],
             quote_reply: Vec::new(),
@@ -8680,6 +11610,7 @@ mod tests {
                 market,
                 code: "000001".to_string(),
                 name: name.to_string(),
+                volume_unit: 100,
                 meta,
             }
         };
@@ -9031,6 +11962,7 @@ fn code_table_preview(
             .to_string(),
         code: record.code.clone(),
         name: record.name.clone(),
+        volume_unit: record.volume_unit,
         decimal_point: record.decimal_point(),
         pre_close: record.pre_close(),
         meta_hex: record.meta_hex(),
@@ -9204,11 +12136,11 @@ fn parse_listen() -> Result<SocketAddr, Box<dyn std::error::Error>> {
 }
 
 fn print_help() {
-    println!("netzip_service [options]");
+    println!("quoteNetzipRs [options]");
     println!("options:");
     println!("  --listen <ip:port>           default 0.0.0.0:16893");
     println!("env:");
     println!("  NETZIP_SERVICE_LISTEN        override listen address");
     println!("example:");
-    println!("  cargo run --bin netzip_service -- --listen 0.0.0.0:16893");
+    println!("  cargo run --bin quoteNetzipRs -- --listen 0.0.0.0:16893");
 }

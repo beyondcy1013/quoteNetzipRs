@@ -1,0 +1,17 @@
+[Unit]
+Description=quoteNetzipRs native Rust full-market publisher to quoteGateway
+Requires=quote-netzip-rs-supplement.service quoteTdx.service
+After=network-online.target quote-netzip-rs-supplement.service quoteTdx.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/bin/netzip
+EnvironmentFile=-/etc/default/netzip-rs
+ExecStart=/home/bin/netzip/run-full-push.sh
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

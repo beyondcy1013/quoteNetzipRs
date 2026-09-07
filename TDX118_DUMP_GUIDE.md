@@ -43,7 +43,7 @@ curl -fsS -X POST http://127.0.0.1:16893/api/debug/blob-compare \
 
 模块文件：
 
-- [Stock.dat](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC%23/Stock.dat)
+- [Stock.dat](/home/codes/stock/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC%23/Stock.dat)
 
 ## Frida 最短方案
 
@@ -130,4 +130,4 @@ curl -fsS -X POST http://127.0.0.1:16893/api/debug/blob-compare \
   -d '{"left_path":"plain_0118.bin","right_path":"cipher_0118.bin","compare_len":280,"block_size":8}'
 ```
 
-然后再把结果记回 [PROTOCOL_NOTES.md](/home/codes/quoteNetzipRs/PROTOCOL_NOTES.md)。
+然后再把结果记回 [PROTOCOL_NOTES.md](/home/codes/stock/quoteNetzipRs/PROTOCOL_NOTES.md)。

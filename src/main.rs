@@ -32,7 +32,7 @@ fn main() {
         "这个 binary 是 Windows DLL 示例；真实 DLL 调用仍依赖 Windows 下的 Stock.dll/Stock64.dll。"
     );
     println!(
-        "如果当前优先走纯 Rust + Linux，请直接使用 `cargo run --bin netzip_linux -- --help` 或 `cargo run --bin netzip_service`。"
+        "如果当前优先走纯 Rust + Linux，请直接使用 `cargo run --bin netzip_linux -- --help` 或 `cargo run --bin quoteNetzipRs`。"
     );
     println!(
         "按 2026-03-29/30 现场取证，Windows 现场主链仍是 x86 Stock.dll + 网际风.exe + 127.0.0.1:2000 本地桥。"

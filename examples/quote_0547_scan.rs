@@ -339,16 +339,16 @@ fn count_numeric_tokens(bytes: &[u8]) -> usize {
             if start.is_none() {
                 start = Some(i);
             }
-        } else if let Some(s) = start.take() {
-            if i - s >= 6 {
-                count += 1;
-            }
-        }
-    }
-    if let Some(s) = start {
-        if bytes.len() - s >= 6 {
+        } else if let Some(s) = start.take()
+            && i - s >= 6
+        {
             count += 1;
         }
+    }
+    if let Some(s) = start
+        && bytes.len() - s >= 6
+    {
+        count += 1;
     }
     count
 }

@@ -702,15 +702,15 @@ fn decode_rip_relative_patterns(bytes: &[u8], offset: usize) -> Result<Vec<RipPa
             let modrm = *bytes
                 .get(base + 2)
                 .ok_or_else(|| "short read for modrm".to_string())?;
-            if is_rip_relative_modrm(modrm) {
-                if let Some(kind) = two_byte_rip_kind(opcode2) {
-                    let disp = read_i32(bytes, base + 3)?;
-                    out.push(RipPattern {
-                        instr_len: (prefix_len + 7) as u8,
-                        disp,
-                        kind,
-                    });
-                }
+            if is_rip_relative_modrm(modrm)
+                && let Some(kind) = two_byte_rip_kind(opcode2)
+            {
+                let disp = read_i32(bytes, base + 3)?;
+                out.push(RipPattern {
+                    instr_len: (prefix_len + 7) as u8,
+                    disp,
+                    kind,
+                });
             }
         }
     }

@@ -10,12 +10,20 @@ trap 'rm -rf "$tmp_dir"; rmdir "$project_tmp_dir" 2>/dev/null || true' EXIT
 mkdir -p "$tmp_dir/bin"
 cat >"$tmp_dir/bin/date" <<'EOF'
 #!/usr/bin/env bash
+if [[ "${1:-}" == "+%s" ]]; then
+    printf '1000\n'
+    exit 0
+fi
 printf '1:120000\n'
 EOF
 cat >"$tmp_dir/bin/curl" <<'EOF'
 #!/usr/bin/env bash
-printf 'unexpected curl: %s\n' "$*" >>"${NETZIP_TEST_CURL_LOG:?}"
-exit 1
+printf '%s\n' "$*" >>"${NETZIP_TEST_CURL_LOG:?}"
+if [[ "$*" == *'/api/fullpull/official-5188/status'* ]]; then
+    printf '%s\n' '{"authenticated":true,"control_session_retained":true,"initialized":true,"connection_count":10,"slots":[0,1,2,3,4,5,6,7,8,9],"shadows":[{"running":true,"last_error":null},{"running":true,"last_error":null},{"running":true,"last_error":null},{"running":true,"last_error":null},{"running":true,"last_error":null},{"running":true,"last_error":null},{"running":true,"last_error":null},{"running":true,"last_error":null},{"running":true,"last_error":null},{"running":true,"last_error":null}]}'
+    exit 0
+fi
+exit 22
 EOF
 cat >"$tmp_dir/bin/sleep" <<'EOF'
 #!/usr/bin/env bash
@@ -40,4 +48,5 @@ if [[ "$status" != "124" ]]; then
 fi
 grep -Fq 'online and idle: outside trading window' "$tmp_dir/output.log"
 test -s "$NETZIP_TEST_SLEEP_LOG"
-test ! -e "$NETZIP_TEST_CURL_LOG"
+grep -Fq '/api/fullpull/official-5188/status' "$NETZIP_TEST_CURL_LOG"
+! grep -Fq '/api/codes/worklist' "$NETZIP_TEST_CURL_LOG"

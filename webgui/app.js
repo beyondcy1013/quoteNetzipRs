@@ -8,7 +8,7 @@ const state = {
 
 const HEALTH_TITLE = "健康检查";
 const DEFAULT_SERVICE_ORIGIN = "http://127.0.0.1:16893";
-const DEFAULT_REMOTE_HOST = "120.195.71.160";
+const DEFAULT_REMOTE_HOST = "";
 
 const elements = {
   serviceStatus: document.querySelector("#serviceStatus"),

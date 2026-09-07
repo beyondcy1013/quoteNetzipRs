@@ -1,12 +1,11 @@
-#![allow(non_snake_case)]
+#![allow(non_snake_case, dead_code)]
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
-use std::time::Duration;
 
-mod gateway;
+pub mod gateway;
 
 const ABI_VERSION: u32 = 0x7812_3456;
 const PUSH_MAGIC: u32 = 0x3f00_1234;
@@ -86,7 +85,7 @@ pub extern "system" fn GetStockDrvInfo(selector: i32, _out: *mut c_void) -> u32 
         3 => 1,
         4 => 12,
         5 => 32,
-        1..=32 => selector as u32,
+        6..=32 => selector as u32,
         _ => 0,
     }
 }
@@ -197,6 +196,7 @@ fn stop_push() {
 
 #[cfg(target_os = "windows")]
 fn push_loop(hwnd: isize, message: u32, stop: Arc<AtomicBool>) {
+    #[link(name = "user32")]
     unsafe extern "system" {
         fn SendMessageW(hwnd: isize, message: u32, wparam: usize, lparam: isize) -> isize;
     }
@@ -245,7 +245,7 @@ fn push_loop(hwnd: isize, message: u32, stop: Arc<AtomicBool>) {
         let mut waited = 0;
         while waited < interval && !stop.load(Ordering::Acquire) {
             let step = (interval - waited).min(100);
-            std::thread::sleep(Duration::from_millis(step));
+            std::thread::sleep(std::time::Duration::from_millis(step));
             waited += step;
         }
     }

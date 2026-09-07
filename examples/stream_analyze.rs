@@ -85,8 +85,8 @@ fn parse_args() -> Result<Config, Box<dyn Error>> {
     let mut input = None;
     let mut is_hex = false;
 
-    let mut args = env::args().skip(1);
-    while let Some(arg) = args.next() {
+    let args = env::args().skip(1);
+    for arg in args {
         match arg.as_str() {
             "--hex" => is_hex = true,
             "--bin" => is_hex = false,
@@ -113,13 +113,12 @@ fn parse_hex_like(input: &str) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut compact = String::new();
     for line in input.lines() {
         let mut part = line;
-        if let Some((left, _)) = line.split_once("  ") {
-            if left
+        if let Some((left, _)) = line.split_once("  ")
+            && left
                 .chars()
                 .all(|ch| ch.is_ascii_hexdigit() || ch.is_ascii_whitespace())
-            {
-                part = left;
-            }
+        {
+            part = left;
         }
         for token in part.split_whitespace() {
             if token.ends_with(':') {
@@ -142,7 +141,7 @@ fn parse_hex_like(input: &str) -> Result<Vec<u8>, Box<dyn Error>> {
         }
     }
 
-    if compact.len() % 2 != 0 {
+    if !compact.len().is_multiple_of(2) {
         return Err("hex text has odd number of hex digits".into());
     }
 
@@ -209,7 +208,7 @@ fn try_utf16le_preview(bytes: &[u8]) -> Option<String> {
 
     let limit = bytes.len().min(256) / 2;
     let mut words = Vec::with_capacity(limit);
-    for chunk in bytes[..limit * 2].chunks_exact(2) {
+    for chunk in bytes[..limit * 2].as_chunks::<2>().0 {
         let word = u16::from_le_bytes([chunk[0], chunk[1]]);
         if word == 0 {
             break;
@@ -258,7 +257,7 @@ fn looks_like_zlib_header(cmf: u8, flg: u8) -> bool {
     if cmf & 0x0f != 8 {
         return false;
     }
-    (((cmf as u16) << 8) | flg as u16) % 31 == 0
+    (((cmf as u16) << 8) | flg as u16).is_multiple_of(31)
 }
 
 fn try_gzip(bytes: &[u8]) -> Option<Vec<u8>> {
@@ -295,13 +294,13 @@ fn scan_candidates(bytes: &[u8]) {
     let mut hits = 0usize;
     for offset in 0..=bytes.len() - OEM_HEAD_LEN {
         let slice = &bytes[offset..];
-        if let Some(packet) = try_parse_packet(slice) {
-            if is_useful_packet(&packet) {
-                println!("candidate-oem@{offset}: {}", packet.summary());
-                hits += 1;
-                if hits >= 8 {
-                    break;
-                }
+        if let Some(packet) = try_parse_packet(slice)
+            && is_useful_packet(&packet)
+        {
+            println!("candidate-oem@{offset}: {}", packet.summary());
+            hits += 1;
+            if hits >= 8 {
+                break;
             }
         }
     }
@@ -706,12 +705,12 @@ fn scan_utf16_strings(bytes: &[u8], min_chars: usize) -> Vec<(usize, String)> {
 }
 
 fn decode_utf16_z(bytes: &[u8]) -> Option<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
 
     let mut words = Vec::with_capacity(bytes.len() / 2);
-    for chunk in bytes.chunks_exact(2) {
+    for chunk in bytes.as_chunks::<2>().0 {
         let word = u16::from_le_bytes([chunk[0], chunk[1]]);
         if word == 0 {
             break;
@@ -728,7 +727,7 @@ fn decode_utf16_z(bytes: &[u8]) -> Option<String> {
 
 fn decode_utf16_tail(bytes: &[u8]) -> String {
     let mut out = String::new();
-    for chunk in bytes.chunks_exact(2) {
+    for chunk in bytes.as_chunks::<2>().0 {
         let word = u16::from_le_bytes([chunk[0], chunk[1]]);
         if word == 0 {
             if !out.ends_with('|') {

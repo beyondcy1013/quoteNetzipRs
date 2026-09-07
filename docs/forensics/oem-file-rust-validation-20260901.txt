@@ -1,0 +1,81 @@
+quoteNetzipRs OEM file/FIN V6 validation
+Date: 2026-09-01 Asia/Shanghai
+
+Scope
+-----
+- Shared validator: /home/codes/stock/crates/netzip-supplement
+- OEM codec: crates/tuwenca-codec
+- HTTP endpoint: POST /api/supplement/file/oem
+- No deployment or service restart was performed.
+
+Authoritative inputs
+--------------------
+- Current Wine file:
+  /home/codes/third_party/quoteNetzipWine/数据/财务V6.fin
+- Captured complete Wine object:
+  windows_debug/tmp_netzip_probe_20260329/
+  frida_ws2_trace_20260330_v16_init_full_2000_chunks/
+  outer_object_catalog/object_bins/object_05.bin
+- Captured object catalog:
+  windows_debug/tmp_netzip_probe_20260329/
+  frida_ws2_trace_20260330_v16_init_full_2000_chunks/
+  outer_object_catalog/summary.txt and objects.csv
+
+FIN V6 file contract
+--------------------
+- Header size: 8 bytes.
+- Magic: 0x223fd90c.
+- Record size: 166 bytes.
+- The validator requires a non-empty record set and zero trailing remainder.
+- The current file is 1,024,726 bytes and contains 6173 records.
+- Current file SHA-256:
+  1e2602f1f63205df588f6a58466d3694002b95f3b6d6f56a88524c247a28d701
+
+Captured Wine object fixture
+----------------------------
+- Outer object bytes: 995182.
+- OEM_DATA_HEAD starts at outer offset 132; file payload starts at offset 332.
+- Captured payload bytes: 994846, containing 5993 records.
+- Captured payload SHA-256:
+  a03c7129ed3853c65a8532ccd5f3593a18f3050517473585baaeb67adb9b7768
+- OEM_DATA_HEAD: type=文件, label=数据\财务V6.fin, name empty, len=994846,
+  count=1.
+- encode_file_packet preserves the payload without parsing, compression or rewriting.
+  The complete 200-byte OEM head plus all 994846 payload bytes compare exactly after
+  only normalizing unused UTF-16 slot tails in the captured head.
+- No payload byte is normalized.
+
+Compile and test evidence
+-------------------------
+- TDD GREEN request: 025648-18d0ccb5d58be46b
+- TDD GREEN log:
+  /home/bin/webclx/compile/runs/20260901T025654-337246-2654/build-1.log
+- quoteNetzipRs bin tests: 57 passed, 0 failed.
+- Full regression request: 025715-18d0ccb5d58be46c
+- Full regression log:
+  /home/bin/webclx/compile/runs/20260901T025720-338967-19881/build-1.log
+- netzip-supplement, workspace and doc-test groups completed with 0 failures.
+- tuwenca-codec: 11 passed, 0 failed, including the complete object_05 fixture.
+- Release profile completed and target/release/quoteNetzipRs was present.
+
+Isolated HTTP validation
+------------------------
+- Process: target/release/quoteNetzipRs --listen 127.0.0.1:16894
+- Request body: {"ask_id":41}
+- HTTP: 200; Content-Type: application/octet-stream.
+- Response bytes: 1024926.
+- OEM_DATA_HEAD: type=文件, label=数据\财务V6.fin, name empty,
+  len=1024726, count=1, ask_id=41.
+- Response packet SHA-256:
+  438998959c6ac332bcf7cbaabc2fdb89bff7e2ed39918cef063a560f3c494663
+- Response payload SHA-256:
+  1e2602f1f63205df588f6a58466d3694002b95f3b6d6f56a88524c247a28d701
+- cmp against the current Wine file returned 0.
+- The isolated process was stopped and port 16894 was confirmed closed.
+
+Boundary
+--------
+This closes captured object_05 and the current dynamic FIN V6 file path. The
+object_01..15 outer wrappers and control packets are now independently closed in
+docs/forensics/wine-initialization-outer-objects-rust-validation-20260901.txt.
+Live callback ordering and intraday realtime quality remain separate work.

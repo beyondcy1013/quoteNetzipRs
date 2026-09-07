@@ -291,18 +291,15 @@ fn print_help() {
 }
 
 fn matches_filters(config: &Config, packet: &TcpPacket) -> bool {
-    if let Some(host) = config.host {
-        if packet.src.ip != host && packet.dst.ip != host {
-            return false;
-        }
-    }
-    if !config.ports.is_empty()
-        && !config.ports.contains(&packet.src.port)
-        && !config.ports.contains(&packet.dst.port)
+    if let Some(host) = config.host
+        && packet.src.ip != host
+        && packet.dst.ip != host
     {
         return false;
     }
-    true
+    !(!config.ports.is_empty()
+        && !config.ports.contains(&packet.src.port)
+        && !config.ports.contains(&packet.dst.port))
 }
 
 fn canonical_flow(src: Endpoint, dst: Endpoint) -> FlowKey {

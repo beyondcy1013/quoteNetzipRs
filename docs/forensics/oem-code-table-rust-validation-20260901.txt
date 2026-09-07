@@ -1,0 +1,77 @@
+OEM code-table Rust validation - 2026-09-01
+================================================
+
+Scope
+-----
+- Endpoint: POST /api/supplement/code-table/oem
+- Isolation listener: 127.0.0.1:16894 (stopped after validation)
+- No deployment, install, or service restart was performed.
+- Wine worklist: /home/codes/third_party/quoteNetzipWine/用户/只接收股票代码表.csv
+
+Wine full-object byte fixtures
+------------------------------
+- SH source: object_01.bin, inner packet offset 264, length 741650, 2965 stocks.
+- SZ source: object_02.bin, inner packet offset 264, length 841900, 3366 stocks.
+- Reconstructed records: 6331/6331 from the captured records.csv files.
+- Normalization: only bytes after the first UTF-16 NUL in each fixed label/name/pinyin slot
+  were zeroed. Those bytes are uninitialized Wine memory and vary between records/runs.
+- Result: both complete inner packets compare byte-for-byte after that normalization.
+- OEM_DATA_HEAD.value[0] is the China-local midnight timestamp derived from
+  OEM_MARKETINFO.date. Captured date 20260327 maps to 1774540800.
+- Captured pinyin: 6331/6331 exact. The 137 symbol+name-specific polyphonic overrides are
+  stored in src/bin/oem_pinyin_overrides.tsv.
+
+Build and test evidence
+-----------------------
+- Target pinyin GREEN request: 014435-18d0ccb5d58be44d.
+- Full object GREEN request: 014858-18d0ccb5d58be44f.
+- Full regression/release request: 014923-18d0ccb5d58be450.
+- Central log: /home/bin/webclx/compile/runs/20260901T014928-170460-22911/build-1.log
+- netzip-fullpull: 47 passed.
+- netzip-supplement: 6 passed.
+- quoteNetzipRs: 54 passed.
+- tuwenca-codec: 8 passed.
+- Workspace and doc tests: status 0.
+- Release artifact verified present: target/release/quoteNetzipRs.
+
+Current live-data HTTP validation
+---------------------------------
+SH response:
+- HTTP 200, Content-Type application/octet-stream.
+- Size 645150 = 200 + 200 + 2579 * 250.
+- packet type/name: 代码表 / 上海证券代码表.
+- payload len/count: 644950 / 2579.
+- market/date: SH / 20260831.
+- OEM_DATA_HEAD.value: [1788105600, 0, 0].
+- askId: 17.
+- SHA-256: 3c8bbed60ebadf2f7141d46f1bedeb9352640271a56d28435ee58018235ccc3c.
+- SH600000: 浦发银行, PFYH, market 0, block 1, point 2, hand 100,
+  last 9.0, limitUp 9.90, limitDown 8.10, isIndex 0, isDaPan 0, isStock 1.
+- Unchanged-name overlap with the 2026-03-27 Wine capture: 2487 records,
+  pinyin mismatches: 0.
+
+SZ response:
+- HTTP 200, Content-Type application/octet-stream.
+- Size 827400 = 200 + 200 + 3308 * 250.
+- packet type/name: 代码表 / 深圳证券代码表.
+- payload len/count: 827200 / 3308.
+- market/date: SZ / 20260831.
+- OEM_DATA_HEAD.value: [1788105600, 0, 0].
+- askId: 18.
+- SHA-256: c9d993d1ba36ebbae899dfc12618554ecfdf4b154ba3ef18cf82b16fbb0d39fe.
+- SZ000001: 平安银行, PAYH, market 1, block 16, point 2, hand 100,
+  last 11.65, limitUp 12.81, limitDown 10.48, isIndex 0, isDaPan 0, isStock 1.
+- SZ300001: block 26, limitUp 41.89 (+20%), limitDown 31.42 (-10%).
+- SZ399001: block 15, isIndex 1, isDaPan 1.
+- Unchanged-name overlap with the 2026-03-27 Wine capture: 3096 records,
+  pinyin mismatches: 0.
+
+Join closure and validation boundary
+------------------------------------
+- Wine worklist requested: 6954.
+- 7709 joined records: 5887 = SH 2579 + SZ 3308.
+- Missing records: 1067, retained by the JSON endpoint; no OEM records were fabricated.
+- market=BJ returns HTTP 400 with: market must be SH or SZ.
+- This evidence closes the Wine code-table inner object and current HTTP code-table path.
+  It does not close object_03 (除权), object_04 (财务), object_05 (文件), or the complete
+  Wine initialization object chain.

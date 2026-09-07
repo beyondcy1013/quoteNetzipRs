@@ -57,7 +57,7 @@ Windows 测试进程（PID `40504`）和脱敏成功抓包
   - 所以“图文卡/通视/分析家通用”在本仓库里首先是术语标签与兼容背景，不是对当前 TCP 负载封装方式的结论。
 
 - 本仓库的主判断仍以两类资料为准：
-  - 项目内已纳入的官方/历史参考目录 `./netzip_api_bin/NetzipAPI`
+  - 项目内已纳入的官方/历史参考目录 `./docs/netzip_api_bin/NetzipAPI`
   - 当前仓库实际抓到并可重组验证的会话样本
 
 - 网上可以找到一些第三方镜像/旧博客，会把这套接口直接称为“网际风通视接口”或“分析家通用接口”。
@@ -250,8 +250,8 @@ Windows 测试进程（PID `40504`）和脱敏成功抓包
 ```
 
 - 这些请求串来自本地文档：
-  - `./netzip_api_bin/NetzipAPI/股票接口调用规范.txt`
-  - `./netzip_api_bin/NetzipAPI/StockC++/OemStock.h`
+  - `./docs/netzip_api_bin/NetzipAPI/股票接口调用规范.txt`
+  - `./docs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h`
 
 - 上面的请求串是 `Ask(...)` 的上层 API 输入语义，不等于上游远端 wire payload。
 
@@ -1445,7 +1445,7 @@ Windows 测试进程（PID `40504`）和脱敏成功抓包
 
 - 这轮又把 `0x1004fce0 / 0x1004fe40` 的网络语义坐实了：
   - 新增的 `dll_imports` 工具可以直接列出 IAT 地址：
-    - `cargo run --example dll_imports -- ./netzip_api_bin/NetzipAPI/StockC#/Stock.dat 0x100f22c8 0x100f22cc 0x100f22d0 0x100f22ec 0x100f22f0`
+    - `cargo run --example dll_imports -- ./docs/netzip_api_bin/NetzipAPI/StockC#/Stock.dat 0x100f22c8 0x100f22cc 0x100f22d0 0x100f22ec 0x100f22f0`
   - 已确认：
     - `0x100f22c8 = WSACreateEvent`
     - `0x100f22cc = WSAEventSelect`
@@ -1648,7 +1648,7 @@ Windows 测试进程（PID `40504`）和脱敏成功抓包
 - `实时数据` 这一层，这轮已经基本钉死成 `OEM_REPORT(pack=1)` 映射，不再只是“像 500 字节对象”：
   - 本节地址来自当时分析的 DLL 样本，是历史结构证据。当前生产公共时间行为以
     前述 `网际风.exe 0x4839a3 -> 0x438800` 为准，不能把下列地址直接套到当前 DLL。
-  - 头文件 [OemStock.h](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 已确认有：
+  - 头文件 [OemStock.h](/home/codes/stock/quoteNetzipRs/docs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 已确认有：
     - `#pragma pack(push, 1)`
     - `struct OEM_REPORT // 实时数据，500 字节`
   - `0x10083980`
@@ -1717,7 +1717,7 @@ Windows 测试进程（PID `40504`）和脱敏成功抓包
       - `last / limitUp / limitDown` 分别来自 getter `0x10005130 / 0x10005160 / 0x100051c0`
       - `isIndex / isDaPan / isStock / bsNum` 分别来自 `this + 0xb0 / 0xb2 / 0xb1 / 0xb5`
     - 这里还有一个容易忽略的细节：
-      - [OemStock.h](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里这几组盘口数组声明成了 `float [10]`
+      - [OemStock.h](/home/codes/stock/quoteNetzipRs/docs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里这几组盘口数组声明成了 `float [10]`
       - 但 `0x1007ef80` 当前只显式循环填了前 `5` 档
       - 这和注释里的“申卖价1..5 / 申买价1..5”是一致的，只是结构体槽位预留得更大
   - 这意味着：
@@ -1752,7 +1752,7 @@ Windows 测试进程（PID `40504`）和脱敏成功抓包
   - 现在更准确地说，是 `OEM_MARKETINFO + OEM_STKINFO[]` 的代码表初始化导出器：
     - `0x10083a00(base) = base + 0xc8`
     - `0x100839c0(n) = 0xc8 + n * 0xfa`
-    - [OemStock.h](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里：
+    - [OemStock.h](/home/codes/stock/quoteNetzipRs/docs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里：
       - `offsetof(OEM_MARKETINFO, stkInfo) = 0xc8`
       - `sizeof(OEM_STKINFO) = 0xfa = 250`
   - 几个关键字段已经能对上：
@@ -1779,7 +1779,7 @@ Windows 测试进程（PID `40504`）和脱敏成功抓包
   - `0x1007de80`
     - 分配大小是 `0x3e8 + count * 0xc8`
     - 尾部会用 `(payload_len - 0xc8) / 0xc8` 回算条数
-    - 这和 [OemStock.h](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里：
+    - 这和 [OemStock.h](/home/codes/stock/quoteNetzipRs/docs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里：
       - `OEM_SPLIT_HEAD = 0xc8 = 200`
       - `OEM_SPLIT = 0xc8 = 200`
       - 完全一致
@@ -2005,7 +2005,7 @@ cargo run --example proto_probe -- --help
 cargo run --example stream_analyze -- client_to_server.raw --bin
 cargo run --example pcap_summary -- capture.pcap
 cargo run --example pcap_reassemble -- capture.pcap --src 192.168.3.38:2697 --dst 39.108.103.69:7100 --out /tmp/flow.bin
-cargo run --example dll_call_xrefs -- ./netzip_api_bin/NetzipAPI/StockC++/Stock64.dll 0x1800129a0 0x1800128c0
+cargo run --example dll_call_xrefs -- ./docs/netzip_api_bin/NetzipAPI/StockC++/Stock64.dll 0x1800129a0 0x1800128c0
 ```
 
 可用于继续试验不同发送格式。

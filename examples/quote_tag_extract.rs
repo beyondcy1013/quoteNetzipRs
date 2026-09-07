@@ -295,26 +295,26 @@ fn extract_numeric_tokens(bytes: &[u8]) -> Vec<String> {
             if start.is_none() {
                 start = Some(i);
             }
-        } else if let Some(s) = start.take() {
-            if i - s >= 6 {
-                out.push(String::from_utf8_lossy(&bytes[s..i]).into_owned());
-            }
+        } else if let Some(s) = start.take()
+            && i - s >= 6
+        {
+            out.push(String::from_utf8_lossy(&bytes[s..i]).into_owned());
         }
     }
-    if let Some(s) = start {
-        if bytes.len() - s >= 6 {
-            out.push(String::from_utf8_lossy(&bytes[s..]).into_owned());
-        }
+    if let Some(s) = start
+        && bytes.len() - s >= 6
+    {
+        out.push(String::from_utf8_lossy(&bytes[s..]).into_owned());
     }
     out
 }
 
 fn parse_tag_0547_items(body: &[u8]) -> Option<Vec<Tag0547Item>> {
-    if body.len() < 4 || (body.len() - 4) % 11 != 0 {
+    if body.len() < 4 || !(body.len() - 4).is_multiple_of(11) {
         return None;
     }
     let mut out = Vec::new();
-    for chunk in body[4..].chunks_exact(11) {
+    for chunk in body[4..].as_chunks::<11>().0 {
         let market_flag = chunk[0];
         let code = String::from_utf8_lossy(&chunk[1..7]).into_owned();
         let token = u32::from_le_bytes([chunk[7], chunk[8], chunk[9], chunk[10]]);

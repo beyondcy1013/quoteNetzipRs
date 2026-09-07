@@ -1,28 +1,41 @@
 # NetzipRs
 
-Linux 原生 Rust 行情服务，直连网际风 `7709` 上游，不依赖 Windows、Wine、
-`Stock.dll` 或 FoxTrader。生产链路为：
+Linux 原生 Rust 行情服务，目标是复刻 `quoteNetzipWine` 的两类数据功能：官方全推和
+7709 补数据。两者必须严格区分：
 
 ```text
-网际风 7709 -> NetzipRs -> quoteGateway(netzipRust7709) -> stockScreener
+正式账号 -> 7100 认证/端点发现 -> 非 7709 厂商全推数据链(当前证据为 5188)
+        -> netzip-fullpull -> quoteNetzipRs -> quoteGateway
+
+7709 查询服务器 -> netzip-supplement -> quoteNetzipRs
 ```
+
+`netzip-fullpull` 由旧共享 crate 改名，新名称对应 Wine 的官方真正全推功能，而不是 7709
+全市场轮询。`netzip-supplement` 对应 Wine 的补数据功能，7709 代码表、快照、K 线、F10
+和财务查询均属于该边界。完整术语和迁移状态见
+[能力与包边界](docs/capability-boundaries.md)。
+
+当前 Rust 代码尚未完成认证后 5188 全推链。现有常驻 runner 和
+`POST /api/hqw/push-worklist` 仍通过 7709 扫描工作表并发布，只是历史过渡路径，不能称为
+官方全推，也不能用来替代当前 Wine 主链。
 
 ## 快速使用
 
 - HTTP/Web GUI：`http://192.168.3.2:16893/`
 - 监听：`0.0.0.0:16893`（局域网可用，无鉴权，不应映射到公网）
 - 健康检查：`GET /health`
-- 主动查行情：`GET /api/quotes?codes=SZ000001,SH600000`
-- 服务：`netzip-rs.service`
-- 常驻全推：`netzip-rs-full-push.service`
+- 过渡发布：`POST /api/hqw/push-worklist`（7709 工作表扫描，由 runner 调用）
+- 补数据/诊断：主动查行情、代码表、F10/K线、协议分析和 Web GUI
+- 服务：`quote-netzip-rs-supplement.service`（quoteNetzipRs 的 Rust 补数与兼容接口服务）
+- 历史命名的常驻 7709 发布：`quote-netzip-rs-full-push.service`
 
 ```bash
 curl -fsS http://192.168.3.2:16893/health
-curl -fsS 'http://192.168.3.2:16893/api/quotes?codes=SZ000001,SH600000'
-systemctl status netzip-rs.service netzip-rs-full-push.service
+curl -fsS http://192.168.3.2:16893/api/capabilities
+systemctl status quote-netzip-rs-supplement.service quote-netzip-rs-full-push.service
 ```
 
-全推只发布到 quoteGateway 独立来源 `netzipRust7709`，不写入
+当前 7709 过渡发布只写入 quoteGateway 独立来源 `netzipRust7709`，不写入
 `quoteNetzipWine`。传输优先使用 `127.0.0.1:16889` 的持久 TCP MessagePack + zstd，
 失败时回退到 `POST http://127.0.0.1:16886/api/source/netzipRust7709/ingest`。
 
@@ -72,19 +85,20 @@ v2 缓存行迁移到 v3，跨交易日和普通同版本冲突仍按原规则�
 
 本项目有一个重要的参考目录（已移入本项目内）：
 
-- 相对路径：`./netzip_api_bin/NetzipAPI`
-- 绝对路径：`/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI`
+- 相对路径：`./docs/netzip_api_bin/NetzipAPI`
+- 绝对路径：`/home/codes/stock/quoteNetzipRs/docs/netzip_api_bin/NetzipAPI`
 
 这个目录保存了官方/历史样本中的接口规范、C++/C#/Python 示例、DLL 与配置文件、服务器列表和相关资源。当前仓库中的 DLL 调用方式、请求串格式、运行依赖、抓包分析结论，都需要和这个参考目录交叉核对。
 
 更完整的目录关系、用途说明和使用约定见：
 
-- [AGENTS.md](./AGENTS.md)
+- [AGENTS.MD](./AGENTS.MD)
 
 当前结论：
 
 - 可以持续推进 Rust 版本，而且当前实施优先级已经切到纯 Rust + Linux。
-- 当前已经有一条不依赖 Windows DLL 的 `7709` Linux 原生链，可直接支撑 `代码表 / 实时行情 / K线 / F10分类`。
+- `../crates/netzip-fullpull` 由旧共享 crate 改名，语义上只对应 Wine 正式账号登录后的官方全推。当前目录仍暂存旧包迁入的 7709/0547 代码，这是待拆分的实现债务。
+- `../crates/netzip-supplement` 对应 Wine 的 7709 补数据，并将逐步收敛代码表、快照、K线、F10、FIN 和相关 OEM 映射。
 - 纯 Rust 已能使用运行时凭据完成 `7100` 认证；完整替代 Windows 主链仍需继续处理本地 `2000` 及登录后的其它业务壳层。
 - `Ask(...)` 的请求串是 DLL 上层调用语义，不应直接等同为远端 `6100/7100/7709/7719` 的原始网络帧。
 
@@ -95,12 +109,14 @@ v2 缓存行迁移到 v3，跨交易日和普通同版本冲突仍按原规则�
 `NETZIP_TDX_AUTH_HOST / NETZIP_TDX_AUTH_PORT` 覆盖。
 
 ```bash
-NETZIP_TDX_ACCOUNT=1522 NETZIP_TDX_PASSWORD='<runtime-secret>' \
+NETZIP_TDX_ACCOUNT='<formal-account>' NETZIP_TDX_PASSWORD='<runtime-secret>' \
   cargo run --example auth_7100_login
 ```
 
 成功结果必须同时满足 `authenticated=true`，以及响应角色顺序
-`zstd_dictionary / download_file / zstd_dictionary`。`status=登录成功` 是 Rust 状态机对完整
+`auth_login / download_file / zstd_dictionary`。首包是普通 ZSTD 的 19 字段
+`认证/请求登录` 清单；12 字段字典 `加密包` 只用于认证后的 5188 分连接初始化。
+`status=登录成功` 是 Rust 状态机对完整
 认证响应链的解析结果，不是借用 Wine 回调或离线抓包的状态。
 
 ## 当前分层全景
@@ -241,15 +257,15 @@ NETZIP_TDX_ACCOUNT=1522 NETZIP_TDX_PASSWORD='<runtime-secret>' \
 
 项目内的参考位置：
 
-- `./netzip_api_bin/NetzipAPI/StockC++/Stock.dll`
-- `./netzip_api_bin/NetzipAPI/StockC++/Stock64.dll`
-- `./netzip_api_bin/NetzipAPI/StockC++/网际风.exe`
-- `./netzip_api_bin/NetzipAPI/StockC++/Stock.dat`
-- `./netzip_api_bin/NetzipAPI/StockC++/Stock.字典`
-- `./netzip_api_bin/NetzipAPI/StockC++/系统/Stockdrv.dll`
-- `./netzip_api_bin/NetzipAPI/StockC++/用户/配置文件.ini`
-- `./netzip_api_bin/NetzipAPI/StockC++/用户/服务器列表.ini`
-- `./netzip_api_bin/NetzipAPI/StockC++/升级配置.ini`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/Stock.dll`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/Stock64.dll`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/网际风.exe`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/Stock.dat`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/Stock.字典`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/系统/Stockdrv.dll`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/用户/配置文件.ini`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/用户/服务器列表.ini`
+- `./docs/netzip_api_bin/NetzipAPI/StockC++/升级配置.ini`
 
 ## 用法
 
@@ -382,13 +398,13 @@ fn handle_answer(buf: &[u8]) {
 当前仓库已经补了一层最小可用的 HTTP 服务，入口是 `src/bin/netzip_service.rs`：
 
 ```bash
-cargo run --bin netzip_service -- --listen 0.0.0.0:16893
+cargo run --bin quoteNetzipRs -- --listen 0.0.0.0:16893
 ```
 
 也可以用环境变量：
 
 ```bash
-NETZIP_SERVICE_LISTEN=0.0.0.0:16893 cargo run --bin netzip_service
+NETZIP_SERVICE_LISTEN=0.0.0.0:16893 cargo run --bin quoteNetzipRs
 ```
 
 当前已提供的稳定接口：
@@ -400,7 +416,7 @@ NETZIP_SERVICE_LISTEN=0.0.0.0:16893 cargo run --bin netzip_service
 - `GET /api/capabilities`
 - `GET /api/quotes?codes=SH600000,SZ000001`（仅作为 `quote-gateway` 的 Linux/Rust 上游行情接口）
 - `POST /api/hqw/publish`（将指定行情直接投递到 quote-gateway 现有 HQW 数据源）
-- `POST /api/hqw/publish-worklist`（按 quote-gateway 处理股票工作表，从 7709 单会话分批全推）
+- `POST /api/hqw/publish-worklist`（按 quote-gateway 工作表从 7709 单会话分批查询并过渡发布）
 - `POST /api/fin/parse`
 - `POST /api/fin/query-record`
 - `POST /api/fin/getter-value`
@@ -410,6 +426,15 @@ NETZIP_SERVICE_LISTEN=0.0.0.0:16893 cargo run --bin netzip_service
 - `POST /api/tdx7709/live-quote`
 - `POST /api/tdx7709/snapshot`
 - `POST /api/tdx7709/kline`
+- `POST /api/supplement/kline`（按网际风配置语义补日线、5分钟线和1分钟线）
+- `POST /api/supplement/kline/oem`（返回原厂 `OEM_DATA_HEAD + OEM_KLINE[]` 二进制布局）
+- `POST /api/supplement/code-table`（按原 Wine UTF-16LE 接收清单筛选并连接实时 7709 代码表）
+- `POST /api/supplement/code-table/oem`（返回原厂 `OEM_DATA_HEAD + OEM_MARKETINFO + OEM_STKINFO[]` 布局）
+- `POST /api/supplement/split/oem`（按 Wine 接收清单筛选当前 PWR V8，返回原厂 `OEM_DATA_HEAD + OEM_SPLIT_HEAD/OEM_SPLIT[]` 布局）
+- `POST /api/supplement/finance/oem`（按 Wine 接收清单筛选当前 FIN V8，返回原厂 `OEM_DATA_HEAD + OEM_FINANCE[]` 布局）
+- `POST /api/supplement/file/oem`（校验当前财务 V6 文件并返回原厂 `OEM_DATA_HEAD + 原始文件 payload` 布局）
+- `POST /api/supplement/realtime`（解析 Wine `实时.dat` 固定槽并返回磁盘原始 getter 报告）
+- `POST /api/supplement/realtime/oem`（连接 Wine `实时.dat` 与 FIN V8，返回完整 `OEM_DATA_HEAD + OEM_REPORT[]`）
 - `POST /api/tdx7709/f10/categories`
 - `POST /api/tdx7709/f10/content`
 - `GET /api/tdx7709/bootstrap-plan`
@@ -460,25 +485,60 @@ curl -fsS -X POST http://127.0.0.1:16893/api/tdx7709/sync-code-table \
   -d '{"preview_limit":1}'
 curl -fsS -X POST http://127.0.0.1:16893/api/tdx7709/query-code-table \
   -H 'Content-Type: application/json' \
-  -d '{"host":"120.195.71.160","port":7709,"query":"600000","limit":5}'
+  -d '{"host":"<supplement-host>","port":7709,"query":"600000","limit":5}'
 curl -fsS -X POST http://127.0.0.1:16893/api/tdx7709/live-quote \
   -H 'Content-Type: application/json' \
-  -d '{"host":"120.195.71.160","port":7709,"symbols":["SH600000","SZ300948"],"settle_ms":300}'
+  -d '{"host":"<supplement-host>","port":7709,"symbols":["SH600000","SZ300948"],"settle_ms":300}'
 curl -fsS -X POST http://127.0.0.1:16893/api/tdx7709/snapshot \
   -H 'Content-Type: application/json' \
-  -d '{"host":"120.195.71.160","port":7709,"symbol":"SH600000","kline_type":"1d","kline_count":3,"f10_limit":5,"read_timeout_ms":400,"connect_timeout_ms":1000,"settle_ms":100}'
+  -d '{"host":"<supplement-host>","port":7709,"symbol":"SH600000","kline_type":"1d","kline_count":3,"f10_limit":5,"read_timeout_ms":400,"connect_timeout_ms":1000,"settle_ms":100}'
 curl -fsS -X POST http://127.0.0.1:16893/api/tdx7709/snapshot \
   -H 'Content-Type: application/json' \
   -d '{"symbol":"SH600000","include_f10":false,"kline_type":"1d","kline_count":3}'
 curl -fsS -X POST http://127.0.0.1:16893/api/tdx7709/kline \
   -H 'Content-Type: application/json' \
-  -d '{"host":"120.195.71.160","port":7709,"symbol":"SH600000","kline_type":"1d","count":5,"settle_ms":300}'
+  -d '{"host":"<supplement-host>","port":7709,"symbol":"SH600000","kline_type":"1d","count":5,"settle_ms":300}'
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/kline \
+  -H 'Content-Type: application/json' \
+  -d '{"symbols":["SH600000","SZ000001"],"periods":["daily","five_minute","one_minute"],"counts":{"daily":1000,"five_minute":3000,"one_minute":2000},"page_size":800,"interval_ms":10}'
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/kline/oem \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"SH600000","period":"daily","count":3,"ask_id":6,"power":0}' \
+  -o /tmp/SH600000-daily.oem
+
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/code-table \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/code-table/oem \
+  -H 'Content-Type: application/json' \
+  -d '{"market":"SH","ask_id":17}' \
+  -o /tmp/SH-code-table.oem
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/code-table/oem \
+  -H 'Content-Type: application/json' \
+  -d '{"market":"SZ","ask_id":18}' \
+  -o /tmp/SZ-code-table.oem
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/split/oem \
+  -H 'Content-Type: application/json' \
+  -d '{"ask_id":31}' \
+  -o /tmp/split.oem
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/finance/oem \
+  -H 'Content-Type: application/json' \
+  -d '{"ask_id":37}' \
+  -o /tmp/finance.oem
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/realtime \
+  -H 'Content-Type: application/json' \
+  -d '{}' \
+  -o /tmp/wine-realtime.json
+curl -fsS -X POST http://127.0.0.1:16893/api/supplement/realtime/oem \
+  -H 'Content-Type: application/json' \
+  -d '{"ask_id":47}' \
+  -o /tmp/wine-realtime.oem
 curl -fsS -X POST http://127.0.0.1:16893/api/tdx7709/f10/categories \
   -H 'Content-Type: application/json' \
-  -d '{"host":"120.195.71.160","port":7709,"symbol":"SH600000","limit":5,"settle_ms":300}'
+  -d '{"host":"<supplement-host>","port":7709,"symbol":"SH600000","limit":5,"settle_ms":300}'
 curl -fsS -X POST http://127.0.0.1:16893/api/tdx7709/f10/content \
   -H 'Content-Type: application/json' \
-  -d '{"host":"120.195.71.160","port":7709,"symbol":"SH600000","category_name":"最新提示","preview_chars":300,"settle_ms":300}'
+  -d '{"host":"<supplement-host>","port":7709,"symbol":"SH600000","category_name":"最新提示","preview_chars":300,"settle_ms":300}'
 curl -fsS http://127.0.0.1:16893/api/tdx7709/bootstrap-plan
 curl -fsS http://127.0.0.1:16893/api/debug/tdx118-dump-compare-plan
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/answer-summary \
@@ -504,23 +564,23 @@ curl -fsS -X POST http://127.0.0.1:16893/api/debug/quote-frame-scan \
   -d '{"path":"/tmp/flow_7709_2400.bin"}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/quote-replay \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/quoteNetzipRs/tmp/flow_2655_7709_probe.bin","host":"120.195.71.160","port":7709}'
+  -d '{"path":"/home/codes/stock/quoteNetzipRs/tmp/flow_2655_7709_probe.bin","host":"<supplement-host>","port":7709}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/proto-probe \
   -H 'Content-Type: application/json' \
-  -d '{"host":"120.195.71.160","port":7709,"payload":"0c0100000000020002001500","encoding":"hex","read_secs":1}'
+  -d '{"host":"<supplement-host>","port":7709,"payload":"0c0100000000020002001500","encoding":"hex","read_secs":1}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/pcap-summary \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/quoteNetzipRs/tmp/netzip_full_tcp.pcap","segment_limit":12}'
+  -d '{"path":"/home/codes/stock/quoteNetzipRs/tmp/netzip_full_tcp.pcap","segment_limit":12}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/local-2000-log-scan \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/quoteNetzipRs/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","port":2000,"small_max":4096,"code_preview_limit":20}'
+  -d '{"path":"/home/codes/stock/quoteNetzipRs/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","port":2000,"small_max":4096,"code_preview_limit":20}'
 curl -fsS http://127.0.0.1:16893/api/debug/local-2000-vs-auth-7100
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/local-2000-vs-auth-7100 \
   -H 'Content-Type: application/json' \
-  -d '{"local_log_path":"/home/codes/quoteNetzipRs/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","auth_pcap_path":"/home/codes/quoteNetzipRs/tmp/netzip_full_tcp.pcap"}'
+  -d '{"local_log_path":"/home/codes/stock/quoteNetzipRs/windows_debug/tmp_netzip_probe_20260329/frida_ws2_trace_20260330_v11.log","auth_pcap_path":"/home/codes/stock/quoteNetzipRs/tmp/netzip_full_tcp.pcap"}'
 curl -fsS -X POST http://127.0.0.1:16893/api/debug/stream-analyze \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/home/codes/quoteNetzipRs/captured_windows_traffic/client_to_server_full.raw","is_hex":false}'
+  -d '{"path":"/home/codes/stock/quoteNetzipRs/captured_windows_traffic/client_to_server_full.raw","is_hex":false}'
 ```
 
 `GET /api/quotes` 是面向 `quote-gateway` 的紧凑生产契约，数据链为
@@ -532,6 +592,89 @@ curl -fsS -X POST http://127.0.0.1:16893/api/debug/stream-analyze \
 网际风按证券类别执行的 `f32` 有损量化，不做固定偏移补偿，quoteGateway 也不二次计算。
 `POST /api/tdx7709/live-quote` 保留为详细诊断协议，便于与紧凑接口做 A/B 对比。
 
+`POST /api/supplement/kline` 是历史补数业务接口，和实时推送分层。它复用
+当前物理实现仍通过 `netzip-fullpull` 中待迁移的单个 7709 会话及 `0x052d` K 线协议，由共享
+`/home/codes/stock/crates/netzip-supplement` crate 负责分页、请求间隔、跨页去重、时间排序和
+逐项失败状态。周期固定为 `daily / five_minute / one_minute`，默认根数分别来自 Wine 配置的
+`1000 / 3000 / 2000`；未传 `periods` 时只补日线，避免一次默认请求产生过大的返回。
+单次请求最多 64 个证券、每周期 23000 根、合计 100000 根。响应中的
+`source_protocol=netzip-rust-7709-052d-supplement.v1` 明确标识补数来源，不把历史数据当成
+实时推送。
+
+`POST /api/supplement/kline/oem` 面向需要兼容官方 C/C# `OEM_KLINE` 内存布局的调用方。
+它仍由 `netzip-supplement` 完成分页补数，再编码成一个 200 字节 `OEM_DATA_HEAD` 和按时间升序的
+32 字节 `OEM_KLINE` 数组；证券名称来自同一 7709 会话的代码表，也可用请求中的 `name` 显式
+覆盖。`period` 只接受 `daily / five_minute / one_minute`，分别写入 `日线 / 5分钟线 / 1分钟线`。
+响应类型为 `application/octet-stream`，长度恒为 `200 + 实际返回根数 * 32`。日线时间按 Wine
+归一到中国零点，分钟线保留 7709 时间；成交量按同一会话代码表的 `volume_unit` 换算并四舍五入。
+2026-09-01 使用隔离测试账号 `168/168` 保存的 SH600000 日线、5分钟线、1分钟线三份完整
+296 字节 answer，已经分别通过 codec 与服务映射逐字节比较。证据见
+`docs/forensics/oem-kline-wine-full-buffer-validation-20260901.txt`；该单证券三根 fixture 不代替
+大页数、全证券单位、异常回调、并发负载和开盘全市场质量验收。
+
+`POST /api/supplement/code-table` 使用原 Wine 的 UTF-16LE
+`用户/只接收股票代码表.csv` 决定证券集合，再与同一请求中新建的 7709 同步会话按
+`market + 六位代码` 连接。响应保留 `volume_unit / decimal_point / pre_close / meta_hex`，并
+明确返回 `missing_symbols`；请求可用 `worklist_path` 指定另一份同格式清单。2026-09-01 现场清单包含
+6954 个唯一启用证券，实时连接命中 5887 个，1067 个退市证券或到期转债等未命中项均保留在缺失列表中。
+
+`POST /api/supplement/code-table/oem` 只接受 `market=SH` 或 `market=SZ`，复用上述 Wine 清单和
+7709 连接结果，不直接编码未经筛选的 50000 条全量记录。它在同一 7709 会话上查询本市场一只已命中
+证券的最新日线，以该交易日填写 `OEM_MARKETINFO.date`，再编码一个 200 字节 `OEM_DATA_HEAD`、一个
+200 字节 `OEM_MARKETINFO` 和本市场每只已命中证券的 250 字节 `OEM_STKINFO`。block、市场编号、
+指数标志、交易时段和涨跌停规则来自 2026-03-27 Wine SH/SZ 全量代码表抓包；缺失证券不会被伪造进
+二进制响应。`OEM_DATA_HEAD.value[0]` 写入市场日期对应的中国本地零点 Unix 时间戳。拼音默认由
+Unicode 拼音生成，抓包确认的 137 个多音字名称以 `symbol + name` 精确覆盖；2026-03-27 的 SH/SZ
+6331 条记录已在规范化 UTF-16 未初始化槽尾后，与 Wine 完整内层对象逐字节一致。
+
+`POST /api/supplement/split/oem` 从当前 Wine `数据/除权V8.pwr` 读取除权事件，以同一份
+UTF-16LE 接收清单做证券交集并保持清单顺序，不依赖 7709 网络。PWR 中只有 `SH/SZ/BJ + 六位数字`
+的标准组参与输出，带字母后缀的历史代码单独统计且不会误连到六位证券。响应编码为一个 200 字节
+`OEM_DATA_HEAD`，随后每个证券包含一个 200 字节 `OEM_SPLIT_HEAD` 和若干 200 字节
+`OEM_SPLIT`；`volume`、组保留区和 `explain` 按 Wine 完整抓包均写零。请求可用
+`worklist_path / pwr_path / ask_id` 覆盖默认值。旧 Wine `object_03.bin` 的 5224 组、54376 条事件、
+共 59600 个单元已经在只规范化固定 UTF-16 槽尾后完整逐字节一致；当前动态 PWR 的隔离 HTTP 验收为
+5614 组、60633 条事件、66247 个单元。详见
+`docs/forensics/oem-split-rust-validation-20260901.txt`。除权对象闭环不代表财务、文件或完整初始化对象链
+已经完成。
+
+`POST /api/supplement/finance/oem` 从当前 Wine `数据/财务V8.fin` 读取 224 字节 FIN 记录，以接收
+清单决定输出集合、名称和顺序，不依赖 7709 网络。FIN 的 `record[12..216]` 原样对应 OEM 财务记录中
+`time / bao_gao / shang_shi / 48 metrics` 的 204 字节业务载荷；服务只补 UTF-16 label/name，并将
+58 字节 temp 初始化为零。请求可用 `worklist_path / fin_path / ask_id` 覆盖默认值。旧 Wine
+`object_04.bin` 的 5993 条、2,097,750 字节完整内层对象，已在仅规范化固定 UTF-16 槽尾和跨抓包变化的
+temp 后实现全部业务字节一致；当前动态 FIN 与清单交集为 6153 条，隔离 HTTP 验收返回 2,153,750
+字节。详见 `docs/forensics/oem-finance-rust-validation-20260901.txt`。财务闭环仍不代表文件对象或完整
+初始化顺序已经完成。
+
+`POST /api/supplement/file/oem` 默认读取 Wine `数据/财务V6.fin`，先校验
+`magic=0x223fd90c`、166 字节记录、非空记录集和零尾随余数，再将文件字节原样放入
+`type=文件 / label=数据\财务V6.fin / count=1` 的 200 字节 `OEM_DATA_HEAD` 后。请求可用
+`file_path / label / ask_id` 覆盖默认值。旧 Wine `object_05.bin` 的 994846 字节 payload
+已经完整逐字节一致；当前 1024726 字节文件的隔离 HTTP payload 与源文件 `cmp=0`。详见
+`docs/forensics/oem-file-rust-validation-20260901.txt`。文件外壳和后续控制包的静态抓包格式也已
+闭环，但动态初始化回调顺序、失败分支和盘中质量仍需现场验证。
+
+`POST /api/supplement/realtime` 默认读取 Wine `数据/实时.dat`，校验
+偏移 4 的当前布局标记 `250303`、195216 字节固定头、5206 字节固定槽、声明活动数、证券代码格式和
+重复代码，再返回结构化 JSON。偏移 0 的首 DWORD 会随 Wine 文件刷新而变化；响应中的 `magic`
+字段仅为兼容旧 JSON 契约的诊断令牌，不作为固定格式标识。当前文件包含 6213 个槽，其中 6211 条
+活动记录和两个空槽；记录保留原始价格、
+成交额压缩码、五档价量、会话日期、nowv/nowa、均价、tick、分类和派生指标输入，不把内部整数
+提前冒充公共 `OEM_REPORT` 浮点值。请求可用 `realtime_path` 指向同格式样本。
+
+`POST /api/supplement/realtime/oem` 在上述解析结果上连接 Wine `数据/财务V8.fin`，按当前
+`网际风.exe` 的 getter 规则生成一个 200 字节 `OEM_DATA_HEAD` 和 6211 条 500 字节
+`OEM_REPORT`。它保留 `实时.dat` 自身的证券集合和名称，不按接收清单裁剪；请求可用
+`realtime_path / fin_path / ask_id` 覆盖默认值。金额解码覆盖当前文件的 mode 0/1/2 三条分支，
+`change` 按分类选择 FIN 指标 34 或 35，`weiBi / liangBi`、`inVol`、价格比例、override、五档和
+分类字段均由原始槽位映射。当前 PE、位级对账、代表字段和测试请求见
+`docs/forensics/wine-realtime-dat-rust-validation-20260901.txt`。`object_09/10` codec、磁盘解析和
+完整 loader 已闭环；但当前文件没有竞价记录，也没有命中 Wine 的 volume `+1` 特例，相关分支目前
+只有反汇编对应实现，仍需新鲜动态 fixture。`object_01..15` 的静态外壳和控制包逐字节证据见
+`docs/forensics/wine-initialization-outer-objects-rust-validation-20260901.txt`；动态初始化时序和开盘
+质量不在这一接口的完成范围内。
+
 `POST /api/hqw/publish` 只使用 quote-gateway 的独立 Rust 入口
 `POST /api/source/netzipRust7709/ingest`，身份固定为
 `schema=netzipRust7709.quote_batch.v1`、`source=netzipRust7709`。它不会回退、转写或发布到
@@ -541,12 +684,12 @@ curl -fsS -X POST http://127.0.0.1:16893/api/debug/stream-analyze \
 节假日取到的上一交易日行情伪装成当天数据。每批携带 `batch_id`，响应中的
 `gateway_protocol` 固定标明 Rust 协议。
 
-`POST /api/hqw/publish-worklist` 面向最终的
-`NetzipRs -> quote-gateway -> stockScreener` 链路。它从 quote-gateway 读取的只有处理股票代码和
-目标交易日，不读取 quote-gateway 缓存行情；行情由 NetzipRs 通过一个 7709 TCP 会话按最多
-100 只一批重新获取并投递。默认节点未返回的 SH/SZ 与全部 BJ 会通过第二个单会话
-`139.9.43.31:7709` 重试，可用 `NETZIP_TDX7709_FALLBACK_HOST` 修改该节点。`limit` 默认
-6000，可先设小值验证；响应包含主/回退批次数、回退恢复数量、最终成功数量及缺失代码。
+`POST /api/hqw/push-worklist` 是当前唯一对外服务入口，由常驻 runner 调用。它从
+quote-gateway 读取的只有处理股票代码和目标交易日，不读取 quote-gateway 缓存行情；行情由
+历史 7709 过渡发布使用 `NETZIP_TRANSITION_7709_ENDPOINTS` 显式端点池按分片会话获取并投递。
+该环境变量名称是迁移期兼容项，不代表这些 7709 端点属于官方全推。端点池
+第二个端点仅作为同池故障恢复；没有内置回退服务器。`POST /api/hqw/publish-worklist`
+保留为内部手动验收路径，同样受显式端点池约束。
 
 ## Linux 服务安装
 
@@ -556,43 +699,49 @@ release 构建完成后通过项目安装脚本部署：
 bash scripts/install-service.sh
 ```
 
-systemd 单元为 `netzip-rs.service`，运行文件为
-`/home/bin/netzip/netzip_service`，默认监听 `0.0.0.0:16893`。运行参数可写入
+systemd 单元为 `quote-netzip-rs-supplement.service`，运行文件为
+`/home/bin/netzip/quoteNetzipRs`，默认监听 `0.0.0.0:16893`。该名称明确表示它属于
+quoteNetzipRs 项目的 Rust 原生行情链路，不是网际风官方程序或 Wine 服务。运行参数可写入
 `/etc/default/netzip-rs`，例如：
 
 ```bash
 NETZIP_SERVICE_LISTEN=0.0.0.0:16893
 NETZIP_QUOTE_GATEWAY_ADDR=127.0.0.1:16886
 NETZIP_QUOTE_GATEWAY_NETZIP_RUST_7709_TOKEN=replace-when-rust-ingest-token-is-enabled
-NETZIP_TDX7709_FALLBACK_HOST=139.9.43.31
+NETZIP_TRANSITION_7709_ENDPOINTS=authenticated-host-1:7709,authenticated-host-2:7709
 NETZIP_FULL_PUSH_INTERVAL_SECS=5
 NETZIP_FULL_PUSH_IDLE_INTERVAL_SECS=5
 NETZIP_FULL_PUSH_BATCH_SIZE=100
 NETZIP_FULL_PUSH_LIMIT=6000
-NETZIP_FULL_PUSH_WORKERS=8
-NETZIP_FULL_PUSH_MODE=poll
+NETZIP_FULL_PUSH_WORKERS=64
+NETZIP_FULL_PUSH_MODE=push
 NETZIP_NATIVE_PUSH_SESSION_SECS=240
 NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS=30
 # 仅在显式切换并完成 shadow 验证后设置：
 # NETZIP_NATIVE_PUSH_PUBLISH_ENABLE=1
 ```
 
-安装脚本会启用常驻的 `netzip-rs-full-push.service`，并删除旧的
-`netzip-rs-full-push.timer`。发布进程全天保持在线：交易时段内默认使用 8 个持久 7709 会话分片拉取全市场行情；午休、闭市和
+安装脚本可启用历史命名的 `quote-netzip-rs-full-push.service`，并删除旧名称的
+`netzip-rs-full-push.service` / `netzip-rs-full-push.timer`。它不是官方全推主链：交易时段内默认使用 64 个持久 7709 会话分片扫描全市场行情；午休、闭市和
 周末只按 `NETZIP_FULL_PUSH_IDLE_INTERVAL_SECS` 等待，不访问行情与网关发布接口。只有工作表的
 `as_of_date` 与 `required_quote_trade_date` 一致时才拉取行情，避免节假日重推上一交易日快照。
 
 常驻进程按“交易日 + 上游行情时间”记录每只股票最近成功发布版本。上游返回相同或更早时间的
 快照时计入 `unchanged_count`，不会发给 quoteGateway；一轮没有任何新行情时按
 `NETZIP_FULL_PUSH_INTERVAL_SECS` 等待，避免无数据空转和重复源事件。
-`NETZIP_FULL_PUSH_WORKERS` 可设置为 `1..=16`，实际 worker 数不会超过当前阶段批次数；接口响应会返回
+`NETZIP_FULL_PUSH_WORKERS` 在轮询模式可设置为 `1..=16`，历史 `push` 兼容模式可设置为 `1..=64`；实际 worker 数不会超过当前阶段批次数。接口响应会返回
 `elapsed_ms / primary_elapsed_ms / fallback_elapsed_ms / *worker_count / *slowest_batch_ms`，用于持续观察扫描周期。
 
-`NETZIP_FULL_PUSH_MODE` 默认为 `poll`。显式设为 `push` 后，resident runner 才会调用
-`POST /api/hqw/push-worklist`：沪深按每连接 100 条建立持久订阅，100 ms 内按标的保留最新记录并
+`NETZIP_FULL_PUSH_MODE` 的历史默认值为 `push`，resident runner 默认调用
+`POST /api/hqw/push-worklist`；需要兼容旧的轮询行为时才显式设为 `poll`。沪深仍按每个订阅请求最多 100 条拆分，但由
+`worker_count` 个持久连接均匀承载所有订阅，默认复用 `NETZIP_FULL_PUSH_WORKERS=64`，避免按批次创建约 58 个线程和连接。100 ms 内按标的保留最新记录并
 分批发布；故障分片每秒重连并用初始快照补缺，每 30 秒继续执行一次全市场轮询校验，北交所也由
 该校验路径覆盖。服务端还要求 `NETZIP_NATIVE_PUSH_PUBLISH_ENABLE=1`，缺少该二次授权时会拒绝
-真实发布；请求省略 `publish` 或传 `false` 时仅作影子观测。
+真实发布；请求省略 `publish` 或传 `false` 时仅作影子观测。这里的 `push` 只表示 7709
+会话的 unsolicited/续订交付模式，不等于 Wine 的正式账号官方全推。
+
+systemd 单元同时设置 `MALLOC_ARENA_MAX=4`，限制审计和北交所轮询所使用的短生命周期线程在
+glibc 中遗留过多 allocator arena，避免空闲线程退出后 RSS 和 swap 仍随运行轮次持续增长。
 
 首次影子验证或独立入口尚未验收时，部署必须保持自动全推关闭：
 
@@ -600,7 +749,7 @@ NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS=30
 NETZIP_INSTALL_ENABLE_FULL_PUSH=0 bash scripts/install-service.sh
 ```
 
-该模式只重启 `netzip-rs.service`，并确保 `netzip-rs-full-push.service` 为 inactive。
+该模式只重启 `quote-netzip-rs-supplement.service`，并确保 `quote-netzip-rs-full-push.service` 为 inactive。
 独立入口验证完成后才允许显式恢复常驻发布服务。
 
 手工触发一次完整推送：
@@ -613,8 +762,8 @@ NETZIP_FULL_PUSH_NOW=1:092500 NETZIP_FULL_PUSH_FORCE=1 NETZIP_FULL_PUSH_ONCE=1 \
 查看自动服务：
 
 ```bash
-systemctl status netzip-rs.service netzip-rs-full-push.service
-journalctl -u netzip-rs-full-push.service -f
+systemctl status quote-netzip-rs-supplement.service quote-netzip-rs-full-push.service
+journalctl -u quote-netzip-rs-full-push.service -f
 ```
 
 这层服务目前优先解决两件事：
@@ -650,8 +799,8 @@ journalctl -u netzip-rs-full-push.service -f
   - 新一轮对位也已经把“首个对齐之后的分叉”量出来了：远端第二个 `penc@416` 落在 `payload boundary` 后 `348` 字节，而本地大对象里后续 `penc` 当前落在 `payload boundary` 后 `2 / 190 / 53888` 字节；首个 marker 已对齐，后续 deeper shell 仍未对齐
 - `quote-frame-scan` 会附带一个轻量摘要，直接显示 `7709/7719` 这类 bootstrap 标签、代码表请求计数、`phase_order / phase_counts`，以及首个 `0x7b00` 主站校验帧“去掉前置 tag 后”的 `8-byte` 块统计
   - 当前已能自动标出 `post-login.bulk-record-29b-*`、`post-login.fin-143b-*`、`post-login.quote-0547-*`、`post-login.quote-054c-*` 这几段登录后阶段
-- Windows 动态取证步骤单独写在 [TDX118_DUMP_GUIDE.md](/home/codes/quoteNetzipRs/TDX118_DUMP_GUIDE.md)
-- 如果怀疑之前抓包混入了通达信或其它证券软件的连接，先按 [WINDOWS_PROCESS_CAPTURE_GUIDE.md](/home/codes/quoteNetzipRs/WINDOWS_PROCESS_CAPTURE_GUIDE.md) 做“按目标进程归因”的干净抓包
+- Windows 动态取证步骤单独写在 [TDX118_DUMP_GUIDE.md](/home/codes/stock/quoteNetzipRs/TDX118_DUMP_GUIDE.md)
+- 如果怀疑之前抓包混入了通达信或其它证券软件的连接，先按 [WINDOWS_PROCESS_CAPTURE_GUIDE.md](/home/codes/stock/quoteNetzipRs/WINDOWS_PROCESS_CAPTURE_GUIDE.md) 做“按目标进程归因”的干净抓包
 
 ## Web GUI
 
@@ -884,7 +1033,7 @@ cargo run --example proto_probe -- --help
 cargo run --example stream_analyze -- captured_windows_traffic/client_to_server.raw --bin
 cargo run --example pcap_reassemble -- /tmp/netzip_full_all.pcap --src 192.168.3.38:2697 --dst 39.108.103.69:7100 --out /tmp/flow.bin
 cargo run --example pcap_flow_timeline -- /tmp/netzip_full_tcp.pcap --host 192.168.3.38 --ports 6100,7100,7708,7719,14017
-cargo run --example dll_call_xrefs -- ./netzip_api_bin/NetzipAPI/StockC++/Stock64.dll 0x1800129a0 0x1800128c0
+cargo run --example dll_call_xrefs -- ./docs/netzip_api_bin/NetzipAPI/StockC++/Stock64.dll 0x1800129a0 0x1800128c0
 cargo run --example quote_frame_scan -- /tmp/flow_9278_7719.bin
 cargo run --example quote_replay -- /tmp/flow_9278_7719.bin 110.41.14.158 7719 --segments '0:582:0,582:260:420,842:58:550,900:582:2010,1482:260:444'
 cargo run --example quote_tag_extract -- /tmp/timeline_7709_server_7171.bin --out-dir /tmp/quote0547_server
@@ -1102,6 +1251,7 @@ cargo run --example pcap_summary -- /tmp/netzip_6100.pcap
       - `192.168.3.38:2697 <-> 39.108.103.69:7100` 是 `611/271/333 -> 443/1540/395` 的 `auth_login`
       - 对应调试接口是 `GET /api/debug/auth-7100-flow-matrix`
       - 现在同一路径也支持 `POST /api/debug/auth-7100-flow-matrix`，请求体只要给 `{ "path": "/abs/path/to/file.pcap" }`
+      - 请求体可选 `service_port`（默认 `7100`）；传 `6100` 可对正式登录/字典壳流使用同一矩阵解析器，传 `7719` 可仅做 legacy 流边界探测
       - 也可以直接给 `.pcapng`；服务端会调用系统 `tcpdump` 临时转换成 classic `pcap`
       - `POST` 还支持可选过滤：
         - `local_endpoint`
@@ -1277,7 +1427,7 @@ cargo run --example pcap_summary -- /tmp/netzip_6100.pcap
 继续往下追之后，`Stock.dat` 的登录 bootstrap 已经能从首帧一路连到“读取代码表”：
 
 - 这轮新增了一个导入表辅助工具：
-  - `cargo run --example dll_imports -- ./netzip_api_bin/NetzipAPI/StockC#/Stock.dat 0x100f22cc 0x100f22ec 0x100f22f0 0x100f22d0`
+  - `cargo run --example dll_imports -- ./docs/netzip_api_bin/NetzipAPI/StockC#/Stock.dat 0x100f22cc 0x100f22ec 0x100f22f0 0x100f22d0`
   - 它会直接把 IAT 地址映到导入符号，省掉手算 thunk 偏移
 - 结合它和 `objdump`，现在已经能确认：
   - `0x100f22c8 = WSACreateEvent`
@@ -1390,7 +1540,7 @@ cargo run --example pcap_summary -- /tmp/netzip_6100.pcap
     - 先按 `count * 0x1f4 + 0x3e8` 分配输出区
     - 再逐条调用 `0x1007ef80`
   - `0x1007ef80` 则基本坐实为“内部实时对象 -> 对外 `OEM_REPORT(pack=1)`”的映射器
-  - 这里和 [OemStock.h](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `#pragma pack(push, 1)` / `OEM_REPORT // 实时数据，500 字节` 偏移已经能一一对上：
+  - 这里和 [OemStock.h](/home/codes/stock/quoteNetzipRs/docs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `#pragma pack(push, 1)` / `OEM_REPORT // 实时数据，500 字节` 偏移已经能一一对上：
     - `+0x058..0x084` 对应 `time/foot/openDate/openTime/closeDate/open/high/low/close/volume/amount/inVol`
     - `+0x088..0x176` 对应 `pricesell / volsell / vsellCha / pricebuy / volbuy / vbuyCha`
     - `+0x178..0x1a6` 对应 `jingJia/avPrice/isBuy/nowv/nowa/change/weiBi/liangBi/last/limitUp/limitDown/isIndex/isDaPan/isStock/bsNum/tickNum`
@@ -1414,7 +1564,7 @@ cargo run --example pcap_summary -- /tmp/netzip_6100.pcap
 - `0x1007d810`
   - 现在更准确地说，是 `OEM_MARKETINFO + OEM_STKINFO[]` 的代码表初始化导出器
   - `0x10083a00(base) = base + 0xc8`，`0x100839c0(n) = 0xc8 + n * 0xfa`
-  - 这和 [OemStock.h](/home/codes/quoteNetzipRs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `offsetof(OEM_MARKETINFO, stkInfo) = 0xc8`、`OEM_STKINFO = 250字节` 完全对上
+  - 这和 [OemStock.h](/home/codes/stock/quoteNetzipRs/docs/netzip_api_bin/NetzipAPI/StockC++/OemStock.h) 里的 `offsetof(OEM_MARKETINFO, stkInfo) = 0xc8`、`OEM_STKINFO = 250字节` 完全对上
 
 另外，`rustHq` 这份公开通达信实现对 `0x750010` 这条线也给了一个很强的交叉印证：
 - [packet.rs](/home/codes/crates/rustHq/src/packet.rs#L168) 的标准财务请求低 `16` 位就是 `0x0010`

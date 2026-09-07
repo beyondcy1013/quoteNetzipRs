@@ -1,3 +1,16 @@
+#![allow(
+    clippy::chunks_exact_to_as_chunks,
+    clippy::manual_is_multiple_of,
+    clippy::missing_safety_doc,
+    clippy::too_many_arguments,
+    clippy::collapsible_if,
+    clippy::manual_range_patterns,
+    clippy::items_after_test_module,
+    clippy::unnecessary_unwrap,
+    clippy::type_complexity,
+    clippy::field_reassign_with_default
+)]
+
 pub mod api;
 pub mod auth_7100_client;
 pub mod auth_7100_flow_matrix;
@@ -15,6 +28,7 @@ pub mod debug_stream;
 pub mod legacy_panel;
 pub mod local_2000;
 pub mod local_2000_vs_auth7100;
+pub mod official_5188_runtime;
 pub mod packet;
 pub mod stock_message;
 pub mod tdx7709;
@@ -40,14 +54,22 @@ pub(crate) fn repository_fixture_path(relative: &str) -> std::path::PathBuf {
 
 pub use api::{StockAnswer, StockApi};
 pub use auth_7100_client::{
-    Auth7100ClientConfig, Auth7100LoginResult, Auth7100ProbeResult, DEFAULT_AUTH_HOST,
-    DEFAULT_LOGIN_PORT, DEFAULT_PROBE_PORTS, STOCK_DICTIONARY_SHA256, build_auth_7100_login_packet,
-    build_auth_7100_probe_packet, login_auth_6100, login_auth_6100_with_verified_dictionary,
-    login_auth_7100, probe_auth_server,
+    Auth7100AbkControlFields, Auth7100AckControlFields, Auth7100ClientConfig,
+    Auth7100ControlSession, Auth7100LoginControlFields, Auth7100LoginResult, Auth7100ProbeResult,
+    DEFAULT_AUTH_HOST, DEFAULT_LOGIN_PORT, DEFAULT_PROBE_PORTS, Official5188InitTriplet,
+    Official5188InterleavedInitialization, Official5188InterleavedWithCodeTables,
+    Official5188SlotSession, STOCK_DICTIONARY_SHA256, build_auth_7100_download_file_packet,
+    build_auth_7100_login_packet, build_auth_7100_probe_packet,
+    build_candidate_official_5188_abk_control_packet,
+    build_candidate_official_5188_ack_control_packet,
+    build_candidate_official_5188_login_control_packet, build_current_auth_login_packet,
+    connect_auth_control_with_verified_dictionary, login_auth_6100,
+    login_auth_6100_with_verified_dictionary, login_auth_7100, official_5188_slot_control_numbers,
+    probe_auth_server,
 };
 pub use auth_7100_flow_matrix::{
     Auth7100FlowMatrix, Auth7100FlowPacket, Auth7100FlowSession, analyze_auth_7100_flow_matrix,
-    analyze_auth_7100_flow_matrix_sample,
+    analyze_auth_7100_flow_matrix_sample, analyze_auth_flow_matrix_for_port,
 };
 pub use auth_7100_prefix::{Auth7100PrefixHints, summarize_auth_7100_prefix_hints};
 pub use auth_client_shell::{
@@ -68,7 +90,11 @@ pub use auth_flow_sample::{
 pub use debug_blob_compare::{
     BlobCompareResult, BlockCompareSummary, DiffRun, compare_blob_bytes, compare_blob_files,
 };
-pub use debug_pcap::{PcapFlowSummary, PcapPacketSample, PcapSummary, summarize_pcap_file};
+pub use debug_pcap::{
+    Official5188CapturedFrame, Official5188FrameSample, Official5188PcapFlow, PcapFlowSummary,
+    PcapPacketSample, PcapSummary, extract_official_5188_frames, scan_official_5188_pcap,
+    summarize_pcap_file,
+};
 pub use debug_quote::{
     ProtoProbeConfig, ProtoProbeEncoding, ProtoProbeResult, QuoteReplayConfig, QuoteReplayResult,
     QuoteReplaySegment, parse_probe_encoding, parse_quote_segments, probe_proto, replay_quote_file,
@@ -94,13 +120,17 @@ pub use legacy_panel::{
 };
 pub use local_2000::{
     Local2000CodeHit, Local2000FieldTupleCount, Local2000LargeObject, Local2000LargeSegment,
-    Local2000LogAnalysis, Local2000PacketHit, Local2000RecvEntry, analyze_local_2000_log_file,
-    analyze_local_2000_log_text,
+    Local2000LogAnalysis, Local2000PacketHit, Local2000ProxyObject, Local2000RecvEntry,
+    analyze_local_2000_log_file, analyze_local_2000_log_text, scan_local_2000_proxy_bytes,
 };
 pub use local_2000_vs_auth7100::{
     Auth7100ComparablePrefix, BridgeLayoutMatch, Local2000ComparablePrefix,
     Local2000LargeComparablePrefix, Local2000VsAuth7100Analysis, analyze_local_2000_vs_auth7100,
     analyze_local_2000_vs_auth7100_sample,
+};
+pub use official_5188_runtime::{
+    Official5188ConnectionPlan, Official5188FrameSink, Official5188FrameSinkSnapshot,
+    Official5188ShadowReader, Official5188ShadowSnapshot, Official5188SubscriptionSummary,
 };
 pub use packet::{
     DecodedBuySell610, DecodedF10Section, DecodedFinance, DecodedHead, DecodedKline, DecodedMarket,
@@ -112,6 +142,21 @@ pub use stock_message::{
     StockMessage, StockMessageChannel, StockMessageKind, StockTextFormat,
     interpret_callback_form_data, interpret_callback_ptr, interpret_sync_answer,
 };
+
+#[cfg(test)]
+mod documentation_boundary_tests {
+    #[test]
+    fn readme_never_labels_7709_as_authenticated_fullpull() {
+        let readme = include_str!("../README.md");
+        assert!(!readme.contains("<authenticated-fullpull-host>"));
+        for line in readme.lines().filter(|line| line.contains("\"port\":7709")) {
+            assert!(
+                line.contains("<supplement-host>"),
+                "7709 README example must use supplement terminology: {line}"
+            );
+        }
+    }
+}
 pub use tdx_0547::{
     Tdx0547Body, Tdx0547QuoteHead, Tdx0547Record,
     extra0_time_hint_seconds as tdx_0547_extra0_time_hint_seconds,

@@ -1,0 +1,25 @@
+{
+  "schema": "quoteNetzipRs.official_5188_client_init_variance.v1",
+  "status": "needs-verification",
+  "account_class": "formal",
+  "capture": "diagnostics/20260831-netzip-windows-vs-rust/captures/vendor_pm.pcapng",
+  "capture_sha256": "b9d3b2b4a3e766ee45fd453b6ee745611328d56bd665982ce5c37284ab0a2ad3",
+  "complete_initialization_flow_count": 10,
+  "extracted_frame_count": 72,
+  "kinds": [
+    {"wire_kind": "3610", "count": 30, "payload_lengths": [67, 94, 95], "unique_full_frame_hashes": 12},
+    {"wire_kind": "2d10", "count": 30, "payload_lengths": [32], "unique_full_frame_hashes": 6},
+    {"wire_kind": "0710", "count": 1, "payload_lengths": [12], "unique_full_frame_hashes": 1},
+    {"wire_kind": "2a10", "count": 7, "payload_lengths": [742, 6154], "unique_full_frame_hashes": 7},
+    {"wire_kind": "2e10", "count": 4, "payload_lengths": [24], "unique_full_frame_hashes": 1}
+  ],
+  "observations": [
+    "Each complete flow contains three 3610 frames followed by three 2d10 frames.",
+    "The 95-byte 3610 frame has a distinct full-frame hash on every complete flow.",
+    "The 94-byte and 67-byte 3610 frames are stable across the ten complete flows.",
+    "The three 2d10 frames form two distinct three-frame hash sets across connections.",
+    "Every extracted 2a10 subscription frame has a distinct hash; six carry 1024 entries and one carries 122 entries.",
+    "No captured initialization sequence is promoted to a reusable runtime default."
+  ],
+  "disposition": "Current-session initialization must be generated after authentication; capture replay remains fixture-only."
+}

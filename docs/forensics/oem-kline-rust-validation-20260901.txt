@@ -1,0 +1,54 @@
+quoteNetzipRs OEM K-line runtime validation
+date: 2026-09-01 Asia/Shanghai
+build request: 005303-18d0ccb5d58be442
+build log: /home/bin/webclx/compile/runs/20260901T005309-21686-12370/build-1.log
+service: target/release/quoteNetzipRs --listen 127.0.0.1:16894
+deployment: none
+
+Historical pre-fix record:
+  This file records the earlier Rust-only HTTP response before Wine volume-unit and daily-time
+  normalization were implemented. It is retained as root-cause evidence, not as the current
+  compatibility result. The complete Wine-buffer comparison and corrected service mapping are in
+  docs/forensics/oem-kline-wine-full-buffer-validation-20260901.txt.
+
+Code-table evidence before the fix:
+  first code=000001d
+  last code=999999d
+  bytes 6..8=64 00 (TDX volume unit 100, not a code suffix)
+
+Code-table evidence after the fix:
+  records_total=50000
+  first market=SZ code=000001 name=平安银行
+  last market=SH code=999999 name=上证指数
+  supplement symbol=SH600000 name=浦发银行 fetched_count=1 complete=true error=null
+
+All OEM requests omitted the optional name override.
+
+daily:
+  HTTP/1.1 200 OK
+  content-type=application/octet-stream
+  bytes=296 sha256=a5e8baa25778bd9952c1252d7b71dd328a5d148f8b7f00a3f6c91ff002589d94
+  type=日线 label=SH600000 name=浦发银行 len=96 count=3 flag=0 askId=6 power=0 oemVer=0
+  first=(1787814000,9.18,9.20,8.98,9.07,95810088,868496704,0)
+  last=(1788159600,9.01,9.18,9.00,9.16,99682464,908186816,0)
+
+five_minute:
+  HTTP/1.1 200 OK
+  content-type=application/octet-stream
+  bytes=296 sha256=903e035d631b8777e70bc2c2934a49becced60c8f87155707529cf0e75323c3e
+  type=5分钟线 label=SH600000 name=浦发银行 len=96 count=3 flag=0 askId=7 power=0 oemVer=0
+  first=(1788159000,9.13,9.13,9.11,9.13,1662100,15166357,0)
+  last=(1788159600,9.11,9.16,9.10,9.16,9166600,83921648,0)
+
+one_minute:
+  HTTP/1.1 200 OK
+  content-type=application/octet-stream
+  bytes=296 sha256=18ebd7b94588a26bc1690b32e739effc568050ece5dea2413f8c05ab6094b12a
+  type=1分钟线 label=SH600000 name=浦发银行 len=96 count=3 flag=0 askId=8 power=0 oemVer=0
+  first=(1788159480,9.12,9.12,9.12,9.12,300,2736,0)
+  last=(1788159600,9.16,9.16,9.16,9.16,8178000,74910480,0)
+
+Evidence boundary:
+  The recovered Wine probe proves the 200-byte header, 32-byte records, total 296-byte size,
+  and the fields it printed. It did not retain the complete Wine answer buffer. The hashes above
+  therefore identify only this Rust response and are not a byte-for-byte Wine comparison fixture.

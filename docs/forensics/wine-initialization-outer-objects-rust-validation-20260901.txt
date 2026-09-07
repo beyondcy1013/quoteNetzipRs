@@ -1,0 +1,127 @@
+quoteNetzipRs Wine initialization outer-object validation
+Date: 2026-09-01 Asia/Shanghai
+
+Scope
+-----
+- Codec: crates/tuwenca-codec
+- Authoritative capture: windows_debug/tmp_netzip_probe_20260329/
+  frida_ws2_trace_20260330_v16_init_full_2000_chunks/
+  outer_object_catalog/object_bins/object_01.bin through object_15.bin
+- No deployment, service start, or service restart was performed.
+
+Object catalog
+--------------
+- object_01: Shanghai code table, 741,918 bytes.
+- object_02: Shenzhen code table, 842,168 bytes.
+- object_03: split data, 11,920,468 bytes.
+- object_04: finance data, 2,098,018 bytes.
+- object_05: FIN V6 file object, 995,182 bytes.
+- object_06: notice / welcome, 292 bytes.
+- object_07: notice / authentication-server stock-login error, 340 bytes.
+- object_08: status update / backup stock server, 300 bytes.
+- object_09: realtime data, 3,149,468 bytes.
+- object_10: empty realtime data, 468 bytes.
+- object_11: notice / initialization complete, 292 bytes.
+- object_12: compound initialization request/response/module/status packet, 460 bytes.
+- object_13/14/15 are byte-identical repeats of object_06/07/08.
+
+Captured SHA-256 manifest
+------------------------
+- object_01: fe5e776e15484477fe688a893bdfc8adde5ef3e31c9296ae151afc28728d3507
+- object_02: 8b14ba710da0dbf9c69c4fff2e335d70b119a4b3c49d900635e8283018a8eaf1
+- object_03: b9eb7d35413aca0ed356c62535b876dc373b67cf8e2640c901e32c388b48ee02
+- object_04: dc41c4b123ad08fc93dca229a7e656f9f65bdf275463d609f207b7ae8bffafa7
+- object_05: ee8e7b872a065c0bb595b5bbd516b4ade53cf8c8bc4f218caa60fd2154d1aa30
+- object_06: da2e7a0d625ddecf62b47823fb413ce17211a5c91aaf84ef75a246ff8806a176
+- object_07: 3460167e7b93b193cbfe6b60b26c4caf0d45fad60175f22041e70fbf216eaa68
+- object_08: dabf37bbc78b5ebb44dd2d968c327c040827fff1371bb79ebe5a0159fa2d9fa2
+- object_09: f0ac692c69a3ed37fb62ced211200a82b8124789749f9d932545a575490387a6
+- object_10: d60e492438a8d72f093d54d50af87e5499470daa548cd66591bfac903efbbbbd
+- object_11: 00e15f2e901c8fdc3bb84e46698a771e217cf3741774ca8a3e281ca8aeb25cec
+- object_12: f1f6bdfcbaf6fb2af07f0fa8a0880d33fc6715e4a704d88c0dab02c33b27cace
+- object_13: da2e7a0d625ddecf62b47823fb413ce17211a5c91aaf84ef75a246ff8806a176
+- object_14: 3460167e7b93b193cbfe6b60b26c4caf0d45fad60175f22041e70fbf216eaa68
+- object_15: dabf37bbc78b5ebb44dd2d968c327c040827fff1371bb79ebe5a0159fa2d9fa2
+
+Main-data outer wrapper
+-----------------------
+- Objects 01/02/03/04/09/10 use the same 264-byte prefix and four-byte zero
+  suffix.
+- Comparing all six prefixes shows that only eight u32 length fields vary:
+  offsets 32, 36, 44, 56, 98, 102, 242 and 254.
+- encode_main_data_outer_object recalculates those fields from the inner object
+  length and preserves every inner byte.
+- Round-trip fixture result: all six complete objects match byte-for-byte.
+
+File outer wrapper
+------------------
+- Object 05 uses a distinct 132-byte prefix and four-byte zero suffix.
+- Its variable u32 fields are offsets 32, 36, 44, 56, 98, 102, 110 and 122.
+- encode_file_outer_object recalculates those fields and preserves every inner
+  byte.
+- Round-trip fixture result: complete object_05 matches byte-for-byte.
+- Only one authoritative oem132 wrapper is currently captured, so this wrapper
+  has weaker cross-sample evidence than the six-object main-data wrapper.
+
+Simple control-message family
+-----------------------------
+- Objects 06/07/08/11 share one serialized skeleton. After removing the title
+  and body, the fixed parts have lengths 126, 92, 26 and 4 bytes.
+- Title and body are UTF-16LE with NUL terminators and are each serialized twice.
+- Every other difference is derived from their lengths, except one observed
+  message-family marker: notice=0x606f and status-update=0x65b0.
+- encode_control_message reconstructs all four distinct messages exactly.
+- Captured duplicate checks prove object_13==object_06,
+  object_14==object_07 and object_15==object_08.
+
+Compound control packet
+-----------------------
+- Object 12 contains the UTF-16LE semantic fields request, initialization,
+  response, module, packet name, response packet, response number, notice and
+  initialization complete.
+- Only one authoritative object_12 is available. The codec therefore exposes a
+  fixed semantic template instead of claiming unsupported parameter rules.
+- encode_initialization_control_packet matches all 460 captured bytes.
+
+Inner-object evidence boundary
+------------------------------
+- The complete wrapper round trips above use captured inner bytes to isolate and
+  prove wrapper behavior.
+- Independent structured encoders already cover code tables, splits, finance,
+  file payload, realtime and empty realtime objects.
+- Structured comparisons normalize only explicitly identified Wine
+  uninitialized UTF-16 slot tails and the separately documented realtime
+  one-byte capture phase. Those unstable bytes are not copied into protocol
+  constants.
+- This closes the captured object_01..15 formats. It does not by itself prove
+  live initialization timing, callback ordering under every failure mode, or
+  intraday quote quality.
+
+TDD evidence
+------------
+- Control RED: 043303-18d0ccb5d58be48a
+- Control GREEN: 043944-18d0ccb5d58be48b
+- Main/file wrapper RED: 044235-18d0ccb5d58be48c
+- Main/file wrapper GREEN: 044558-18d0ccb5d58be48d
+- Full codec/workspace/release regression: 045055-18d0ccb5d58be48e
+- Log: /home/bin/webclx/compile/runs/20260901T045100-605748-32057/build-1.log
+- tuwenca-codec: 16 passed, 0 failed.
+- Workspace: 148 passed, 0 failed across non-empty test groups.
+- Release artifact: target/release/quoteNetzipRs, 9,906,256 bytes.
+- Release SHA-256:
+  5b392ab8851db95fd7094d7d468880c927985ca3a560bad7c4ce2f49c4d09a70
+
+Callback-order evidence
+-----------------------
+- probe_run_20260329_v3.txt lines 119..148 records one explicit initialization
+  request and its callbacks.
+- The observed initialization callback order is interface-title status, SH code
+  table, SZ code table, split, finance, file, realtime, empty realtime, then
+  initialization-complete notice.
+- Authentication-server and backup-server notices occur in the preceding login
+  flows and are conditional status messages. They must not be hard-coded as
+  mandatory initialization events merely because the outer-object catalog also
+  contains their serialized packet forms.
+- The outer-object catalog proves byte formats and stream order for its capture;
+  the explicit StockProbe callback log is authoritative for semantic callback
+  ownership.

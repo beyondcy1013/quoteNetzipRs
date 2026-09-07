@@ -175,7 +175,7 @@ fn parse_hex(value: &str) -> Result<Vec<u8>, Box<dyn Error>> {
         .chars()
         .filter(|ch| !ch.is_ascii_whitespace())
         .collect();
-    if compact.len() % 2 != 0 {
+    if !compact.len().is_multiple_of(2) {
         return Err("hex payload must have even length".into());
     }
 

@@ -1,0 +1,17 @@
+Source: Codex read-only history archive
+Session: 019d3981-e5ce-7bd2-8e1f-4e4b47216291
+Original cwd: /home/beyondcy/lyyCodes/netzipapi-rust-demo
+Original file: windows_debug/tmp_netzip_probe_20260329/probe_run_20260329_v3.txt
+
+[probe] head_size=200
+[probe] kline_size=32
+[probe] query/min1=股票数据?请求=1分钟线&代码=SH600000&数量=3&当天数据=1&复权=0&模块=&等待=3000&编号=102
+[probe] query/min1 ret=296
+[probe] answer/min1 type=1分钟线 label=SH600000 name=浦发银行 count=3 len=96 flag=0 askId=5 power=0 oemVer=0
+[probe] kline/min1 first_time=1774594680 first_close=10.03 last_time=1774594800 last_close=10.02
+[probe] query/day=股票数据?请求=日线&代码=SH600000&数量=3&当天数据=1&复权=0&模块=&等待=3000&编号=103
+[probe] query/day ret=296
+[probe] answer/day type=日线 label=SH600000 name=浦发银行 count=3 len=96 flag=0 askId=6 power=0 oemVer=0
+[probe] kline/day first_time=1774368000 first_close=10.1 last_time=1774540800 last_close=10.02
+
+Limitation: the original probe did not persist or print the complete 296-byte answer buffer.

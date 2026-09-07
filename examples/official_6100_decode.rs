@@ -132,15 +132,19 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, Box<dyn Error>> {
 
 fn utf16_terminator(bytes: &[u8]) -> Option<usize> {
     bytes
-        .chunks_exact(2)
-        .position(|word| word == [0, 0])
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .position(|word| *word == [0, 0])
         .map(|words| words * 2)
 }
 
 fn decode_utf16(bytes: &[u8]) -> String {
     String::from_utf16_lossy(
         &bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|word| u16::from_le_bytes([word[0], word[1]]))
             .take_while(|word| *word != 0)
             .collect::<Vec<_>>(),

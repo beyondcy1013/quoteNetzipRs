@@ -7,10 +7,14 @@ interval_secs="${NETZIP_FULL_PUSH_INTERVAL_SECS:-5}"
 idle_interval_secs="${NETZIP_FULL_PUSH_IDLE_INTERVAL_SECS:-5}"
 batch_size="${NETZIP_FULL_PUSH_BATCH_SIZE:-100}"
 limit="${NETZIP_FULL_PUSH_LIMIT:-6000}"
-worker_count="${NETZIP_FULL_PUSH_WORKERS:-8}"
-push_mode="${NETZIP_FULL_PUSH_MODE:-poll}"
+worker_count="${NETZIP_FULL_PUSH_WORKERS:-64}"
+# Native push is the primary resident path; poll remains an explicit fallback.
+push_mode="${NETZIP_FULL_PUSH_MODE:-push}"
 native_session_secs="${NETZIP_NATIVE_PUSH_SESSION_SECS:-240}"
 native_audit_interval_secs="${NETZIP_NATIVE_PUSH_AUDIT_INTERVAL_SECS:-30}"
+native_bj_poll_interval_secs="${NETZIP_NATIVE_BJ_POLL_INTERVAL_SECS:-3}"
+official_5188_retry_secs="${NETZIP_OFFICIAL_5188_RETRY_SECS:-60}"
+last_official_5188_attempt=0
 
 if [[ "$push_mode" != "poll" && "$push_mode" != "push" ]]; then
     echo "NETZIP_FULL_PUSH_MODE must be poll or push" >&2
@@ -52,12 +56,65 @@ clock_to_seconds() {
     printf '%s\n' $((hour * 3600 + minute * 60 + second))
 }
 
+official_5188_ready() {
+    jq -e '
+        .authenticated == true
+        and .control_session_retained == true
+        and .initialized == true
+        and .connection_count == 10
+        and (.slots | length) == 10
+        and (.shadows | length) == 10
+        and all(.shadows[]; .running == true and .last_error == null)
+    ' >/dev/null 2>&1
+}
+
+ensure_official_5188() {
+    local now status
+    now="$(date +%s)"
+    if (( now - last_official_5188_attempt < official_5188_retry_secs )); then
+        return 0
+    fi
+    last_official_5188_attempt="$now"
+
+    status="$(curl --noproxy '*' -fsS --max-time 5 \
+        "http://$service_addr/api/fullpull/official-5188/status" 2>/dev/null || true)"
+    if official_5188_ready <<<"$status"; then
+        return 0
+    fi
+
+    echo "official 5188 requires ten live slots; repairing session"
+    if ! jq -e '.authenticated == true and .control_session_retained == true' \
+        >/dev/null 2>&1 <<<"$status"; then
+        if ! curl --noproxy '*' -fsS --max-time 180 -X POST \
+            "http://$service_addr/api/auth/login" 2>/dev/null \
+            | jq -e '.accepted == true and .status.login_success_confirmed == true' \
+                >/dev/null 2>&1; then
+            echo "official 5188 authentication failed; retrying later" >&2
+            return 1
+        fi
+    else
+        curl --noproxy '*' -fsS --max-time 60 -X POST \
+            "http://$service_addr/api/fullpull/official-5188/disconnect" \
+            >/dev/null 2>&1 || true
+    fi
+
+    if curl --noproxy '*' -fsS --max-time 600 -X POST \
+        "http://$service_addr/api/fullpull/official-5188/connect" 2>/dev/null \
+        | official_5188_ready; then
+        echo "official 5188 ready: ten live slots"
+        return 0
+    fi
+    echo "official 5188 ten-slot initialization failed; retrying later" >&2
+    return 1
+}
+
 worklist_url="http://$gateway_addr/api/codes/worklist?include_unknown=true&include_halted=false&limit=1"
 outside_window_logged=0
 last_worklist_wait=""
 
 while :; do
     should_backoff=0
+    ensure_official_5188 || true
     weekday_clock="$(current_weekday_clock)"
     if ! session_end="$(session_end_for "$weekday_clock")"; then
         if (( outside_window_logged == 0 )); then
@@ -96,10 +153,10 @@ while :; do
             if (( run_secs > remaining_secs )); then
                 run_secs="$remaining_secs"
             fi
-            request_timeout=$((run_secs + 60))
+            request_timeout=$((run_secs + native_audit_interval_secs + 60))
             publish_stage="push-worklist"
             publish_url="http://$service_addr/api/hqw/push-worklist"
-            publish_body="{\"duration_secs\":$run_secs,\"audit_interval_secs\":$native_audit_interval_secs,\"publish\":true}"
+            publish_body="{\"duration_secs\":$run_secs,\"audit_interval_secs\":$native_audit_interval_secs,\"bj_poll_interval_secs\":$native_bj_poll_interval_secs,\"worker_count\":$worker_count,\"publish\":true}"
         else
             request_timeout=300
             publish_stage="publish-worklist"

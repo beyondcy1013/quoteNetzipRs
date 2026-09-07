@@ -4,21 +4,27 @@ Updated: 2026-08-31
 
 ## Objective
 
-Deliver a production-capable native Rust Netzip market-data client that supplies correct, complete,
-timely, and observable quotes to quoteGateway without requiring Wine for the supported Linux path.
-Wine remains a comparison anchor until native authentication, initialization, and post-login
-business behavior have equivalent evidence.
+Deliver a production-capable Rust replica of the two quoteNetzipWine data capabilities: the
+formal-account, non-7709 official full-push chain, and 7709 query supplementation. Wine remains the
+official full-push implementation until authentication, post-login 5188 initialization, continuous
+delivery, and callback behavior have equivalent Rust evidence.
 
 ## Current Delivery State
 
-- The native `7709` route supports code-table synchronization, live quotes, K-line, F10, FIN, and
-  `0547` parsing.
+- `netzip-fullpull::official_5188` now provides an evidence-backed 5188 frame reassembler and
+  client/server direction classifier. It preserves unknown payloads and is covered by split-TCP
+  and unknown-frame tests. This is the first protocol-layer increment toward Wine parity; it is not
+  yet a resident authenticated data session or quote decoder.
+
+- The native `7709` route supports code-table synchronization, snapshot queries, K-line, F10, FIN,
+  and `0547` parsing. These are supplementation/compatibility capabilities, not official full-push.
 - Historical supplementation is now separated into the shared `netzip-supplement` business crate.
   `POST /api/supplement/kline` exposes Wine-configured daily, five-minute, and one-minute defaults
   over paged `0x052d` requests with dedupe, throttling, and per-item partial-failure status.
 - `netzip_linux` and the local HTTP service expose the Linux-first snapshot and focused query paths.
-- Full-market Shanghai/Shenzhen push and the lightweight Beijing polling lane publish into
-  quoteGateway through `netzip-rs-full-push.service`.
+- A historically named 7709 worklist publisher sends Shanghai/Shenzhen and Beijing data into
+  quoteGateway. Its service name contains `full-push`, but its upstream behavior is supplementation
+  scanning and must not be used as official full-push completion evidence.
 - Rust account `1522` authentication to `121.41.70.217:7100` completed successfully in three
   independent TCP sessions. Success requires the response sequence
   `zstd_dictionary -> download_file -> zstd_dictionary`.
@@ -50,7 +56,7 @@ business behavior have equivalent evidence.
 - The same live run separated the remaining bottleneck from Netzip transport: quoteGateway's
   5,543-code merged WebSocket client reached 116.4s p99 event age with 3ms socket-send p99, while a
   177-code native client stayed at 3.74s p99. The gateway report is
-  `/home/codes/stock/quoteTdx/docs/history/2026-08-13-open-market-push-profile.md`.
+  `/home/codes/stock/quoteGateway/docs/history/2026-08-13-open-market-push-profile.md`.
 - The 2026-08-31 native-push deployment raised the default worker ceiling and converged it to the
   53 subscription shards. A normal five-endpoint session completed in 278.780s with
   `endpoint_pool_size=5`, `endpoint_failovers=0`, `worker_count=53`, and `shard_count=53`.
@@ -69,6 +75,14 @@ business behavior have equivalent evidence.
   Wine's 2.002/4.970/5.443s. Wine must remain online as the comparison source.
 
 ## Open Problems
+
+### Protocol boundary note (2026-09-01)
+
+Wine `Start(callback)`/`Ask(...)` initialization strings are local DLL control
+commands. They establish authentication and initialization state but are not
+5188 application-frame payloads. Keep their evidence in the authentication and
+Wine ABI notes; derive 5188 frame bytes only from the captured TCP stream and
+validate them independently with `official_5188`.
 
 ### Completed: Verify the TCP cache and ACK fixes under trading load
 
@@ -115,6 +129,35 @@ contract. `GetTradeData`, daily and 1/5-minute bars, code-table behavior, and re
 contracts still require controlled Windows validation.
 
 ## Verification Evidence
+
+### 2026-09-01 official 5188 boundary pass
+
+The representative Wine capture was re-read at application-frame granularity.
+Long-lived sessions show `0x3610 x3`, `0x2d10 x3`, optional `0x0710`, then
+optional `0x2a10`; server traffic is dominated by `0x2704` with recurring
+`0x0d04`, `0x5404`, `0x2104` and `0x3e04` classes. Some sockets have only
+server-to-client packets because capture began after initialization or the
+socket had another role; this does not relax the Rust authentication gate.
+The transport regression now also asserts metadata preservation across a
+fragmented frame. Inner object decoding and Wine callback parity remain open.
+Evidence note: `docs/forensics/official-5188-frame-boundary-20260901.md`.
+The Wine source audit also confirms that 5188 business decoding is not present
+in `../quoteNetzipWine/src`; the vendor DLL remains the semantic authority.
+The 2026-09-01 binary audit likewise found only `Start`/`Ask`/`Stop` exports and
+non-semantic `ZSTD` strings; no 5188 decoder symbol is available.
+
+### 2026-09-02 `2704` static decoder pass
+
+Static tracing of `StockC++/网际风.exe` located the `2704` dispatcher at
+`0x44aa30`, the MSB-first reader at `0x448a10`, token decoding at
+`0x448b90/0x448d10`, and the 311-byte record decoder at `0x449770`. Rust now
+uses the proven `u16 record_count + u32 value_end_offset` header, restores the
+first-pass market/symbol-index/timestamp/baseline state with the vendor token tables, and
+exports that state beside complete historical frames. The remaining gate is
+the `0x449770` value-field reconstruction and Wine callback field parity;
+`0104` now provides the bounded symbol-index mapping used by the offline
+exporter. Evidence note:
+`docs/forensics/official-5188-2704-static-decoder-20260902.md`.
 
 - Native 7100 authentication implementation: `src/auth_7100_client.rs`
 - Authentication CLI: `examples/auth_7100_login.rs`

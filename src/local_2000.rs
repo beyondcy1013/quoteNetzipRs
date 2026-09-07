@@ -12,6 +12,50 @@ use crate::parse_answer_buffer;
 
 const LOCAL_2000_HEADER: [u8; 8] = [0x51, 0x7f, 0xdc, 0x7e, 0x05, 0x53, 0x00, 0x00];
 const OEM_HEAD_LEN: usize = 200;
+const MAX_LOCAL_PROXY_SCAN_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct Local2000ProxyObject {
+    pub offset: usize,
+    pub declared_len: Option<usize>,
+    pub captured_len: usize,
+    pub complete: bool,
+    pub penc_offset: Option<usize>,
+}
+
+/// Scan reassembled 16801 proxy bytes without retaining or decoding values.
+/// The local proxy uses the same header as the existing local-2000 analyzer.
+pub fn scan_local_2000_proxy_bytes(bytes: &[u8]) -> Vec<Local2000ProxyObject> {
+    let input = &bytes[..bytes.len().min(MAX_LOCAL_PROXY_SCAN_BYTES)];
+    let mut objects = Vec::new();
+    let mut offset = 0usize;
+    while offset + LOCAL_2000_HEADER.len() <= input.len() {
+        let Some(relative) = input[offset..]
+            .windows(LOCAL_2000_HEADER.len())
+            .position(|window| window == LOCAL_2000_HEADER)
+        else {
+            break;
+        };
+        offset += relative;
+        let declared = read_u32_le(input, offset + 32).map(|value| value as usize);
+        let captured_len = declared
+            .map(|length| length.min(input.len().saturating_sub(offset)))
+            .unwrap_or(input.len() - offset);
+        let complete =
+            declared.is_some_and(|length| length >= 64 && offset + length <= input.len());
+        let segment = &input[offset..offset + captured_len];
+        let penc_offset = find_literal(segment, b"penc");
+        objects.push(Local2000ProxyObject {
+            offset,
+            declared_len: declared,
+            captured_len,
+            complete,
+            penc_offset,
+        });
+        offset = offset.saturating_add(captured_len.max(LOCAL_2000_HEADER.len()));
+    }
+    objects
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Local2000LogAnalysis {
@@ -783,7 +827,9 @@ fn utf16le_literal(text: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{analyze_local_2000_log_file, analyze_local_2000_log_text};
+    use super::{
+        analyze_local_2000_log_file, analyze_local_2000_log_text, scan_local_2000_proxy_bytes,
+    };
 
     fn hexdump(bytes: &[u8]) -> String {
         let mut out = String::new();
@@ -812,6 +858,20 @@ mod tests {
             out[68..74].copy_from_slice(b"hypenc");
         }
         out
+    }
+
+    #[test]
+    fn scans_bounded_local_proxy_objects_and_truncation() {
+        let first = make_packet(240, 220, false);
+        let mut second = make_packet(96, 244, false);
+        second.truncate(70);
+        let objects = scan_local_2000_proxy_bytes(&[first, second].concat());
+        assert_eq!(objects.len(), 2);
+        assert_eq!(objects[0].declared_len, Some(240));
+        assert!(objects[0].complete);
+        assert_eq!(objects[0].penc_offset, Some(60));
+        assert_eq!(objects[1].declared_len, Some(96));
+        assert!(!objects[1].complete);
     }
 
     fn write_utf16_code(bytes: &mut [u8], offset: usize, code: &str) {

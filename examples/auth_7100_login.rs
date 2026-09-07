@@ -41,7 +41,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let dictionary_path = std::env::var("NETZIP_TDX_DICTIONARY_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
-            std::path::PathBuf::from("netzip_api_bin/NetzipAPI/StockC++/Stock.字典")
+            std::path::PathBuf::from("docs/netzip_api_bin/NetzipAPI/StockC++/Stock.字典")
         });
     let dictionary = fs::read(dictionary_path)?;
 
